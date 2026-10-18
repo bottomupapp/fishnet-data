@@ -22,6 +22,11 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+try:
+    from research.split_safety import validate_windows
+except ModuleNotFoundError:
+    from split_safety import validate_windows
+
 HOLDOUT_START = pd.Timestamp("2026-08-17", tz="UTC")
 FOLDS = ["2026-04-17", "2026-05-17", "2026-06-17", "2026-07-17", "2026-08-17"]  # test windows between these
 EMBARGO = pd.Timedelta("1D")
@@ -90,6 +95,14 @@ def main() -> None:
         cal_start = a - EMBARGO - pd.Timedelta("30D")
         train = df[df["t"] < cal_start - EMBARGO - label_purge]
         cal = df[(df["t"] >= cal_start) & (df["t"] < a - EMBARGO - label_purge)]
+        validate_windows(
+            (cal_start - EMBARGO - label_purge).to_pydatetime(),
+            cal_start.to_pydatetime(),
+            (a - EMBARGO - label_purge).to_pydatetime(),
+            a.to_pydatetime(),
+            int(label_purge.total_seconds() // 60),
+            int(EMBARGO.total_seconds() // 60),
+        )
         test = df[(df["t"] >= a) & (df["t"] < b)]
         fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(train)), "res": {}}
         for hz in hz_list:
