@@ -1,0 +1,39 @@
+name: Fishnet development baseline
+on:
+  pull_request:
+    paths:
+      - 'research/dev_baseline.py'
+      - '.github/workflows/dev-baseline.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  btc-eth-dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas numpy pyarrow lightgbm
+      - name: Generate historical features
+        run: |
+          python - <<'PY'
+          from research.features import build
+          build('data', ['BTCUSDT','ETHUSDT']).to_parquet('/tmp/fishnet-features.parquet',compression='zstd')
+          PY
+      - name: Train and score one development fold (no holdout)
+        run: python -m research.dev_baseline /tmp/fishnet-features.parquet --output /tmp/fishnet-dev-report.json --rounds 100 --target y_long_15
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-development-baseline
+          path: /tmp/fishnet-dev-report.json
+          retention-days: 30
