@@ -186,8 +186,14 @@ def build(root: str, symbols: list[str], stride: int = 5) -> pd.DataFrame:
         except ValueError:
             continue
         f = features(bars, met, fund)
+        sig = f["sigma_1d"]
+        if os.environ.get("BARRIER_SIGMA") == "local":
+            # Barrier scaled to the larger of the day's and the last hour's volatility, so a model
+            # cannot win just by spotting that volatility has risen: it has to call the direction.
+            r1 = np.log(bars["close"].astype(np.float64)).diff()
+            sig = np.maximum(sig, r1.rolling(60, min_periods=30).std())
         observed = bars["source_observed"].astype(bool)
-        y = mask_labels(labels(bars, f["sigma_1d"]), observed, HORIZONS)
+        y = mask_labels(labels(bars, sig), observed, HORIZONS)
         f = f.where(valid_history(observed, 1440), other=np.nan)
         d = pd.concat([f, y], axis=1).iloc[::stride]
         d = d[d["sigma_1d"].notna()].astype(np.float32)
