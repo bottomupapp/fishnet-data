@@ -6,6 +6,8 @@ on:
       - 'research/quality.py'
       - 'research/test_integration.py'
       - 'research/run.py'
+      - 'research/split_safety.py'
+      - 'research/test_split_safety.py'
       - '.github/workflows/feature-tests.yml'
 permissions:
   contents: read
