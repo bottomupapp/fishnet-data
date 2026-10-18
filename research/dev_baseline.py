@@ -36,12 +36,18 @@ def main():
     model=lgb.train(dict(PARAMS),dataset,num_boost_round=args.rounds)
     y=args.target
     hz=int(y.rsplit("_",1)[-1])
-    result=score(test,model.predict(test[cols]),y,hz,model.predict(cal[cols]))
+    test_predictions=model.predict(test[cols])
+    calibration_predictions=model.predict(cal[cols])
+    result=score(test,test_predictions,y,hz,calibration_predictions)
+    by_symbol={}
+    for symbol in sorted(test["symbol"].unique()):
+        mask=(test["symbol"]==symbol).to_numpy()
+        by_symbol[str(symbol)]=score(test.loc[mask],test_predictions[mask],y,hz,calibration_predictions)
     report={"target":y,"test_start":str(a),"test_end_exclusive":str(end),
             "holdout_locked_from":str(HOLDOUT_START),"rounds":args.rounds,
             "rows":{"train":len(train),"cal":len(cal),"test":len(test)},
-            "features":len(cols),"metrics":result,
-            "warning":"Research-only barrier hit rates; not returns or proof of profitability. No holdout evaluation."}
+            "features":len(cols),"metrics":result,"by_symbol":by_symbol,
+            "warning":"Research-only barrier hit rates, not returns or proof of profitability. Entry at next minute open may be unrealistically optimistic without decision and routing latency; no holdout evaluation."}
     out=Path(args.output);out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
