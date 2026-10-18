@@ -1,0 +1,85 @@
+# Builds the Fishnet research dataset from Binance public archives (data.binance.vision).
+# 60 USDT perpetuals x one year, split in two halves per symbol so each job stays well under
+# the 6-hour limit. Every job uploads its parquet files; the final job commits them to main
+# in batches so no single push gets too large. Run it from the Actions tab or by pushing
+# a change under collect/.
+name: collect
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['collect/**', '.github/workflows/collect.yml']
+
+env:
+  CUTS_START: '2025-10-15'
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, BNBUSDT, ADAUSDT, SUIUSDT, LINKUSDT, AVAXUSDT,
+                 LTCUSDT, TRXUSDT, DOTUSDT, BCHUSDT, NEARUSDT, AAVEUSDT, UNIUSDT, APTUSDT, ARBUSDT, OPUSDT,
+                 FILUSDT, ATOMUSDT, ETCUSDT, TONUSDT, WIFUSDT, 1000PEPEUSDT, 1000SHIBUSDT, ENAUSDT, TIAUSDT, INJUSDT,
+                 SEIUSDT, HBARUSDT, ONDOUSDT, WLDUSDT, JUPUSDT, FETUSDT, TAOUSDT, CRVUSDT, LDOUSDT, ZECUSDT,
+                 XLMUSDT, ICPUSDT, ALGOUSDT, VETUSDT, STXUSDT, GALAUSDT, SANDUSDT, AXSUSDT, PENDLEUSDT, ORDIUSDT,
+                 1000BONKUSDT, 1000FLOKIUSDT, RUNEUSDT, DYDXUSDT, JTOUSDT, PYTHUSDT, STRKUSDT, GRTUSDT, EIGENUSDT, KASUSDT]
+        part:
+          - {name: h1, start: '2025-10-15', end: '2026-03-31'}
+          - {name: h2, start: '2026-04-01', end: '2026-10-17'}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: collect
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pandas numpy pyarrow requests
+      - name: Collect
+        env:
+          PART: ${{ matrix.part.name }}
+        run: |
+          python collect/collect.py ${{ matrix.symbol }} ${{ matrix.part.start }} ${{ matrix.part.end }} data 2>&1 | tee log.txt
+          echo "::notice title=${{ matrix.symbol }} ${{ matrix.part.name }}::$(grep -E 'size cuts|days written|no data' log.txt | tr '\n' ' ') missing $(grep -c ': missing' log.txt || true)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-${{ matrix.symbol }}-${{ matrix.part.name }}
+          path: data/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  commit:
+    needs: collect
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-*
+          path: dl
+      - name: Commit in batches of ten symbols
+        run: |
+          git config user.name "fishnet-collect"
+          git config user.email "actions@users.noreply.github.com"
+          mkdir -p data
+          for d in dl/*/; do cp -r "$d"* data/; done
+          du -sh data; ls data | wc -l
+          syms=$(ls data)
+          set -- $syms
+          while [ $# -gt 0 ]; do
+            batch=""
+            for i in 1 2 3 4 5 6 7 8 9 10; do [ $# -gt 0 ] && batch="$batch data/$1" && shift; done
+            git add $batch
+            git commit -m "data:$(echo $batch | sed 's#data/##g') [skip ci]" || continue
+            git pull --rebase origin main && git push origin HEAD:main
+          done
+          echo "::notice title=dataset::$(du -sh data | cut -f1) in $(ls data | wc -l) symbols"
