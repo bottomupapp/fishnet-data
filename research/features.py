@@ -109,7 +109,9 @@ def features(bars: pd.DataFrame, met: pd.DataFrame | None, fund: pd.DataFrame | 
     out = pd.DataFrame(f, index=bars.index)
     if met is not None and len(met):
         m = met.copy()
-        # A 5-minute row stamped T describes the period ending at T; it becomes known at T.
+        # Binance stamps a 5-minute metrics row with the START of its period (iteration 1 found the
+        # model reading open interest five minutes ahead). Treat a row as known only at T + 6 min.
+        m.index = m.index + pd.Timedelta(minutes=6)
         m = m.reindex(bars.index, method="ffill", limit=10)
         oi = np.log(m["sum_open_interest_value"].astype(np.float64)) if "sum_open_interest_value" in m else None
         if oi is not None:

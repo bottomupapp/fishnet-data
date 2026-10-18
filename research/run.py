@@ -63,9 +63,9 @@ def score(test: pd.DataFrame, p: np.ndarray, y: str, hz: int, cal: np.ndarray) -
     return res
 
 
-def fit(train: pd.DataFrame, cols: list[str], y: str) -> lgb.Booster:
-    tr = train[train[y].notna()]
-    ds = lgb.Dataset(tr[cols], tr[y], free_raw_data=True)
+def fit(X: np.ndarray, yv: np.ndarray, idx: np.ndarray) -> lgb.Booster:
+    idx = idx[~np.isnan(yv[idx])]
+    ds = lgb.Dataset(X[idx], yv[idx], free_raw_data=True)
     return lgb.train(PARAMS, ds, ROUNDS)
 
 
@@ -77,6 +77,12 @@ def main() -> None:
     if not holdout:
         df = df[df["t"] < HOLDOUT_START - EMBARGO]
     cols = feature_cols(df)
+    # One float32 matrix, sliced by position: pandas copies per fold do not fit in 7 GB.
+    X = df[cols].to_numpy(np.float32)
+    X[~np.isfinite(X)] = np.nan
+    meta = df[["t", "symbol"] + [c for c in df.columns if c.startswith("y_")]].reset_index(drop=True)
+    del df
+    df = meta
     hz_list = sorted({int(c.split("_")[-1]) for c in df.columns if c.startswith("y_long_")})
     out = {"name": name, "rows": int(len(df)), "features": len(cols), "folds": [], "importance": {}}
     t0 = time.time()
@@ -85,15 +91,17 @@ def main() -> None:
         windows = [(HOLDOUT_START, df["t"].max() + pd.Timedelta("1min"))]
     for a, b in windows:
         cal_start = a - EMBARGO - pd.Timedelta("30D")
-        train = df[df["t"] < cal_start - EMBARGO]
-        cal = df[(df["t"] >= cal_start) & (df["t"] < a - EMBARGO)]
-        test = df[(df["t"] >= a) & (df["t"] < b)]
-        fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(train)), "res": {}}
+        tr_i = np.flatnonzero((df["t"] < cal_start - EMBARGO).to_numpy())
+        cal_i = np.flatnonzero(((df["t"] >= cal_start) & (df["t"] < a - EMBARGO)).to_numpy())
+        te_i = np.flatnonzero(((df["t"] >= a) & (df["t"] < b)).to_numpy())
+        train = tr_i
+        test = df.iloc[te_i]
+        fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(tr_i)), "res": {}}
         for hz in hz_list:
             for side in ("long", "short"):
                 y = f"y_{side}_{hz}"
-                m = fit(train, cols, y)
-                fold["res"][y] = score(test, m.predict(test[cols]), y, hz, m.predict(cal[cols]))
+                m = fit(X, df[y].to_numpy(np.float32), tr_i)
+                fold["res"][y] = score(test, m.predict(X[te_i]), y, hz, m.predict(X[cal_i]))
                 imp = dict(zip(cols, m.feature_importance("gain")))
                 acc = out["importance"].setdefault(y, {})
                 for k, v in imp.items():
