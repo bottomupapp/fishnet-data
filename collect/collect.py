@@ -191,7 +191,7 @@ def main() -> None:
         f = pd.concat(fund)
         f.columns = [str(c).strip() for c in f.columns]
         f.to_parquet(os.path.join(out, f"funding-{part}.parquet"), compression="zstd", index=False)
-    print(f"{symbol}: {sum(len(v) for v in months.values())} days written", flush=True)
+    print(f"{symbol}: {sum(len(df) for parts in months.values() for df in parts):,} minute rows written across {sum(len(parts) for parts in months.values())} daily files", flush=True)
 
 
 if __name__ == "__main__":
