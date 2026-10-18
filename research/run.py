@@ -84,9 +84,12 @@ def main() -> None:
     if holdout:
         windows = [(HOLDOUT_START, df["t"].max() + pd.Timedelta("1min"))]
     for a, b in windows:
+        # A label at t can depend on prices through t + max(horizon).
+        # Exclude boundary-crossing labels from train/calibration, not just test.
+        label_purge = pd.Timedelta(minutes=max(hz_list))
         cal_start = a - EMBARGO - pd.Timedelta("30D")
-        train = df[df["t"] < cal_start - EMBARGO]
-        cal = df[(df["t"] >= cal_start) & (df["t"] < a - EMBARGO)]
+        train = df[df["t"] < cal_start - EMBARGO - label_purge]
+        cal = df[(df["t"] >= cal_start) & (df["t"] < a - EMBARGO - label_purge)]
         test = df[(df["t"] >= a) & (df["t"] < b)]
         fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(train)), "res": {}}
         for hz in hz_list:
