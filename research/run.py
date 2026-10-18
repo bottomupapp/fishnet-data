@@ -60,7 +60,11 @@ def score(test: pd.DataFrame, p: np.ndarray, y: str, hz: int, cal: np.ndarray) -
     d = test[["t", "symbol", y]].copy()
     d["p"] = p
     d = d[d[y].notna()]
-    res = {"n": int(len(d)), "base": float(d[y].mean())}
+    res = {"n": int(len(d)), "base": float(d[y].mean()) if len(d) else None}
+    cal = np.asarray(cal, dtype=float)
+    cal = cal[np.isfinite(cal)]
+    if cal.size == 0:
+        raise ValueError(f"No valid calibration predictions for {y}")
     for q in TOP:
         thr = float(np.quantile(cal, 1 - q))
         s = dedupe(d[d["p"] >= thr], hz)
@@ -109,7 +113,10 @@ def main() -> None:
             for side in ("long", "short"):
                 y = f"y_{side}_{hz}"
                 m = fit(train, cols, y)
-                fold["res"][y] = score(test, m.predict(test[cols]), y, hz, m.predict(cal[cols]))
+                valid_cal = cal[cal[y].notna()]
+                if valid_cal.empty:
+                    raise ValueError(f"No labeled calibration rows for {y} at {a.date()}")
+                fold["res"][y] = score(test, m.predict(test[cols]), y, hz, m.predict(valid_cal[cols]))
                 imp = dict(zip(cols, m.feature_importance("gain")))
                 acc = out["importance"].setdefault(y, {})
                 for k, v in imp.items():
