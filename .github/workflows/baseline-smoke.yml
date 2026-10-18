@@ -5,6 +5,8 @@ on:
     paths:
       - 'research/features.py'
       - 'research/run.py'
+      - 'research/split_safety.py'
+      - 'research/test_split_safety.py'
       - 'research/quality.py'
       - 'research/test_*.py'
       - '.github/workflows/baseline-smoke.yml'
