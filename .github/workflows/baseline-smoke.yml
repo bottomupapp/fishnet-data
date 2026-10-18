@@ -27,7 +27,7 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s research -p 'test_*.py' -v
       - name: Generate BTC/ETH training features
-        run: python research/features.py data /tmp/fishnet-btc-eth-features.parquet
+        run: python -c "from research.features import build; build('data', ['BTCUSDT', 'ETHUSDT']).to_parquet('/tmp/fishnet-btc-eth-features.parquet', compression='zstd')"
       - name: Check feature dataset
         run: |
           python - <<'PY'
