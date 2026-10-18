@@ -5,6 +5,7 @@ on:
       - 'research/features.py'
       - 'research/quality.py'
       - 'research/test_integration.py'
+      - 'research/run.py'
       - '.github/workflows/feature-tests.yml'
 permissions:
   contents: read
