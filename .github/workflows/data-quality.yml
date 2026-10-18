@@ -1,0 +1,38 @@
+name: Fishnet data quality
+on:
+  pull_request:
+    paths:
+      - 'research/audit_data.py'
+      - '.github/workflows/data-quality.yml'
+      - 'data/BTCUSDT/**'
+      - 'data/ETHUSDT/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  btc-eth-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            data/BTCUSDT
+            data/ETHUSDT
+            research/audit_data.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install audit dependencies
+        run: python -m pip install --disable-pip-version-check pandas numpy pyarrow
+      - name: Audit BTC and ETH minute bars
+        run: python research/audit_data.py data BTCUSDT ETHUSDT | tee fishnet-quality.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fishnet-btc-eth-data-quality
+          path: fishnet-quality.json
+          retention-days: 14
