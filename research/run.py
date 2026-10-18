@@ -22,6 +22,11 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+try:
+    from research.split_safety import validate_windows
+except ModuleNotFoundError:
+    from split_safety import validate_windows
+
 HOLDOUT_START = pd.Timestamp("2026-08-17", tz="UTC")
 FOLDS = ["2026-04-17", "2026-05-17", "2026-06-17", "2026-07-17", "2026-08-17"]  # test windows between these
 EMBARGO = pd.Timedelta("1D")
@@ -55,7 +60,11 @@ def score(test: pd.DataFrame, p: np.ndarray, y: str, hz: int, cal: np.ndarray) -
     d = test[["t", "symbol", y]].copy()
     d["p"] = p
     d = d[d[y].notna()]
-    res = {"n": int(len(d)), "base": float(d[y].mean())}
+    res = {"n": int(len(d)), "base": float(d[y].mean()) if len(d) else None}
+    cal = np.asarray(cal, dtype=float)
+    cal = cal[np.isfinite(cal)]
+    if cal.size == 0:
+        raise ValueError(f"No valid calibration predictions for {y}")
     for q in TOP:
         thr = float(np.quantile(cal, 1 - q))
         s = dedupe(d[d["p"] >= thr], hz)
@@ -63,9 +72,9 @@ def score(test: pd.DataFrame, p: np.ndarray, y: str, hz: int, cal: np.ndarray) -
     return res
 
 
-def fit(X: np.ndarray, yv: np.ndarray, idx: np.ndarray) -> lgb.Booster:
-    idx = idx[~np.isnan(yv[idx])]
-    ds = lgb.Dataset(X[idx], yv[idx], free_raw_data=True)
+def fit(train: pd.DataFrame, cols: list[str], y: str) -> lgb.Booster:
+    tr = train[train[y].notna()]
+    ds = lgb.Dataset(tr[cols], tr[y], free_raw_data=True)
     return lgb.train(PARAMS, ds, ROUNDS)
 
 
@@ -77,12 +86,6 @@ def main() -> None:
     if not holdout:
         df = df[df["t"] < HOLDOUT_START - EMBARGO]
     cols = feature_cols(df)
-    # One float32 matrix, sliced by position: pandas copies per fold do not fit in 7 GB.
-    X = df[cols].to_numpy(np.float32)
-    X[~np.isfinite(X)] = np.nan
-    meta = df[["t", "symbol"] + [c for c in df.columns if c.startswith("y_")]].reset_index(drop=True)
-    del df
-    df = meta
     hz_list = sorted({int(c.split("_")[-1]) for c in df.columns if c.startswith("y_long_")})
     out = {"name": name, "rows": int(len(df)), "features": len(cols), "folds": [], "importance": {}}
     t0 = time.time()
@@ -90,18 +93,30 @@ def main() -> None:
     if holdout:
         windows = [(HOLDOUT_START, df["t"].max() + pd.Timedelta("1min"))]
     for a, b in windows:
+        # A label at t can depend on prices through t + max(horizon).
+        # Exclude boundary-crossing labels from train/calibration, not just test.
+        label_purge = pd.Timedelta(minutes=max(hz_list))
         cal_start = a - EMBARGO - pd.Timedelta("30D")
-        tr_i = np.flatnonzero((df["t"] < cal_start - EMBARGO).to_numpy())
-        cal_i = np.flatnonzero(((df["t"] >= cal_start) & (df["t"] < a - EMBARGO)).to_numpy())
-        te_i = np.flatnonzero(((df["t"] >= a) & (df["t"] < b)).to_numpy())
-        train = tr_i
-        test = df.iloc[te_i]
-        fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(tr_i)), "res": {}}
+        train = df[df["t"] < cal_start - EMBARGO - label_purge]
+        cal = df[(df["t"] >= cal_start) & (df["t"] < a - EMBARGO - label_purge)]
+        validate_windows(
+            (cal_start - EMBARGO - label_purge).to_pydatetime(),
+            cal_start.to_pydatetime(),
+            (a - EMBARGO - label_purge).to_pydatetime(),
+            a.to_pydatetime(),
+            int(label_purge.total_seconds() // 60),
+            int(EMBARGO.total_seconds() // 60),
+        )
+        test = df[(df["t"] >= a) & (df["t"] < b)]
+        fold = {"test": f"{a.date()}..{b.date()}", "train_rows": int(len(train)), "res": {}}
         for hz in hz_list:
             for side in ("long", "short"):
                 y = f"y_{side}_{hz}"
-                m = fit(X, df[y].to_numpy(np.float32), tr_i)
-                fold["res"][y] = score(test, m.predict(X[te_i]), y, hz, m.predict(X[cal_i]))
+                m = fit(train, cols, y)
+                valid_cal = cal[cal[y].notna()]
+                if valid_cal.empty:
+                    raise ValueError(f"No labeled calibration rows for {y} at {a.date()}")
+                fold["res"][y] = score(test, m.predict(test[cols]), y, hz, m.predict(valid_cal[cols]))
                 imp = dict(zip(cols, m.feature_importance("gain")))
                 acc = out["importance"].setdefault(y, {})
                 for k, v in imp.items():

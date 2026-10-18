@@ -1,0 +1,45 @@
+name: Fishnet baseline smoke test
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'research/features.py'
+      - 'research/run.py'
+      - 'research/split_safety.py'
+      - 'research/test_split_safety.py'
+      - 'research/quality.py'
+      - 'research/test_*.py'
+      - '.github/workflows/baseline-smoke.yml'
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas numpy pyarrow lightgbm
+      - name: Validate Python source
+        run: python -m compileall -q research
+      - name: Run unit tests
+        run: python -m unittest discover -s research -p 'test_*.py' -v
+      - name: Generate BTC/ETH training features
+        run: python -c "from research.features import build; build('data', ['BTCUSDT', 'ETHUSDT']).to_parquet('/tmp/fishnet-btc-eth-features.parquet', compression='zstd')"
+      - name: Check feature dataset
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          df = pd.read_parquet('/tmp/fishnet-btc-eth-features.parquet')
+          required = {'t','symbol','y_long_5','y_short_5','y_long_15','y_short_15','y_long_60','y_short_60'}
+          assert required.issubset(df.columns), required - set(df.columns)
+          d = df[df.symbol.isin(['BTCUSDT','ETHUSDT'])]
+          assert len(d) > 100000, len(d)
+          assert not d.duplicated(['t','symbol']).any()
+          print('Fishnet BTC/ETH feature rows:',len(d))
+          print('Time interval:',d.t.min(),d.t.max())
+          PY

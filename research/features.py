@@ -13,6 +13,11 @@ import os
 import numpy as np
 import pandas as pd
 
+try:
+    from research.quality import valid_history, mask_labels
+except ModuleNotFoundError:
+    from quality import valid_history, mask_labels
+
 HORIZONS = (5, 15, 60)
 FEE_FLOOR = 0.002  # 0.2%: round-trip taker fees plus spread, a barrier must clear it
 BARRIER_K = 1.0  # barrier = max(floor, k * sigma_1m * sqrt(h)), sigma over the prior day
@@ -23,7 +28,9 @@ def load_symbol(root: str, sym: str) -> tuple[pd.DataFrame, pd.DataFrame | None,
     bars = pd.concat([pd.read_parquet(f) for f in files]).sort_index()
     bars = bars[~bars.index.duplicated(keep="last")]
     full = pd.date_range(bars.index[0], bars.index[-1], freq="1min", tz="UTC")
+    observed = pd.Series(full.isin(bars.index), index=full, dtype=bool)
     bars = bars.reindex(full)
+    bars["source_observed"] = observed
     flows = [c for c in bars.columns if c.endswith("_q") or c.startswith(("buy_", "sell_")) or c in ("n", "n_buy", "spot_n")]
     bars[flows] = bars[flows].fillna(0.0)
     bars["close"] = bars["close"].ffill()
@@ -109,9 +116,7 @@ def features(bars: pd.DataFrame, met: pd.DataFrame | None, fund: pd.DataFrame | 
     out = pd.DataFrame(f, index=bars.index)
     if met is not None and len(met):
         m = met.copy()
-        # Binance stamps a 5-minute metrics row with the START of its period (iteration 1 found the
-        # model reading open interest five minutes ahead). Treat a row as known only at T + 6 min.
-        m.index = m.index + pd.Timedelta(minutes=6)
+        # A 5-minute row stamped T describes the period ending at T; it becomes known at T.
         m = m.reindex(bars.index, method="ffill", limit=10)
         oi = np.log(m["sum_open_interest_value"].astype(np.float64)) if "sum_open_interest_value" in m else None
         if oi is not None:
@@ -181,7 +186,9 @@ def build(root: str, symbols: list[str], stride: int = 5) -> pd.DataFrame:
         except ValueError:
             continue
         f = features(bars, met, fund)
-        y = labels(bars, f["sigma_1d"])
+        observed = bars["source_observed"].astype(bool)
+        y = mask_labels(labels(bars, f["sigma_1d"]), observed, HORIZONS)
+        f = f.where(valid_history(observed, 1440), other=np.nan)
         d = pd.concat([f, y], axis=1).iloc[::stride]
         d = d[d["sigma_1d"].notna()].astype(np.float32)
         d["symbol"] = sym
