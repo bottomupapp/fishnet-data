@@ -159,11 +159,11 @@ def labels(bars: pd.DataFrame, sig: pd.Series) -> pd.DataFrame:
         up_px, dn_px = entry * (1 + b), entry * (1 - b)
         first_up = np.full(n, np.inf)
         first_dn = np.full(n, np.inf)
-        for k in range(1, hz + 1):
+        for k in range(hz):
             hk = np.full(n, np.nan)
             lk = np.full(n, np.nan)
-            hk[:-k] = h[k:]
-            lk[:-k] = l[k:]
+            hk[:n-k-1] = h[k+1:]
+            lk[:n-k-1] = l[k+1:]
             first_up = np.where(np.isinf(first_up) & (hk >= up_px), k, first_up)
             first_dn = np.where(np.isinf(first_dn) & (lk <= dn_px), k, first_dn)
         valid = ~np.isnan(entry) & ~np.isnan(s)
