@@ -5,6 +5,8 @@ on:
       - 'research/multi_month.py'
       - 'research/test_multi_month.py'
       - 'research/dev_baseline.py'
+      - 'research/portfolio.py'
+      - 'research/test_portfolio.py'
       - 'research/execution.py'
       - 'research/admission.py'
       - 'research/test_admission.py'

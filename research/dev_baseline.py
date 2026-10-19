@@ -10,6 +10,7 @@ import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
 from research.execution import simulate_long, load_historical_bars, net_after_costs
 from research.admission import evaluate_admission
+from research.portfolio import CandidateFill, portfolio_audit
 
 def main():
     ap=argparse.ArgumentParser()
@@ -62,6 +63,8 @@ def main():
         by_symbol = {}
         all_fills = []
         admitted_fills = []
+        all_portfolio_fills = []
+        admitted_portfolio_fills = []
         gate_decisions = {}
         for symbol, group in selected.groupby("symbol"):
             bars = load_historical_bars(args.cost_audit_root, symbol, end)
@@ -80,8 +83,11 @@ def main():
                     )
                     fills.append(fill)
                     all_fills.append(fill)
+                    event = (str(symbol), fill)
+                    all_portfolio_fills.append(event)
                     if admission.admitted:
                         admitted_fills.append(fill)
+                        admitted_portfolio_fills.append(event)
                 except ValueError as exc:
                     reason = str(exc)
                     refused[reason] = refused.get(reason, 0) + 1
@@ -149,6 +155,30 @@ def main():
                 }
                 for name, fee, slip in stress
             ],
+            "release_approved": False,
+        }
+        # Portfolio returns use idle cash, overlapping exposure, and compounding.
+        # Cost was already deducted in AssumedFill.net_return; do not double charge.
+        def equity_report(events, fee, slip):
+            return portfolio_audit([
+                CandidateFill(
+                    symbol=symbol, entry_at=fill.entry_at, exit_at=fill.exit_at,
+                    net_return=net_after_costs(fill.gross_return, fee, slip),
+                ) for symbol, fill in events
+            ], starting_capital=10000, stake_fraction=.10, max_concurrent_positions=2)
+
+        report["portfolio_30d"] = {
+            "window": "30-day development fold, not exact calendar month",
+            "target_net_equity_return": .07,
+            "model_trades_live": False,
+            "ungated_cost_sensitivity": {
+                name: equity_report(all_portfolio_fills, fee, slip)
+                for name, fee, slip in stress
+            },
+            "abstention_cost_sensitivity": {
+                name: equity_report(admitted_portfolio_fills, fee, slip)
+                for name, fee, slip in stress
+            },
             "release_approved": False,
         }
     out=Path(args.output);out.parent.mkdir(parents=True,exist_ok=True)

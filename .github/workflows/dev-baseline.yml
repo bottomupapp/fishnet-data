@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'research/dev_baseline.py'
+      - 'research/portfolio.py'
+      - 'research/test_portfolio.py'
       - 'research/execution.py'
       - 'research/test_execution.py'
       - '.github/workflows/dev-baseline.yml'
