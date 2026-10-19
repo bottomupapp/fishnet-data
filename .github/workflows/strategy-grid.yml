@@ -10,6 +10,8 @@ on:
       - 'research/multi_month.py'
       - 'research/test_multi_month.py'
       - 'research/grid_summary.py'
+      - 'research/joint_portfolio.py'
+      - 'research/test_joint_portfolio.py'
       - 'research/test_grid_summary.py'
       - '.github/workflows/strategy-grid.yml'
   workflow_dispatch:
@@ -83,8 +85,12 @@ jobs:
           merge-multiple: true
       - name: Summarize all six strategies without touching locked holdout
         run: python -m research.grid_summary reports --output reports/fishnet-six-way-summary.json
+      - name: Replay all six directions and horizons through one shared risk book
+        run: python -m research.joint_portfolio reports --output reports/fishnet-joint-portfolio.json
       - uses: actions/upload-artifact@v4
         with:
           name: fishnet-six-way-development-summary
-          path: reports/fishnet-six-way-summary.json
+          path: |
+            reports/fishnet-six-way-summary.json
+            reports/fishnet-joint-portfolio.json
           retention-days: 30

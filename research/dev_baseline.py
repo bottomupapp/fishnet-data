@@ -205,6 +205,21 @@ def main():
                 fee_bps_per_side=fee, slippage_bps_per_side=slip,
             )
 
+        # Historical candidate fills are needed to replay six targets with ONE
+        # shared equity/margin book; side and horizon remain explicit.
+        # Only ex-ante gate-approved candidates are exported.
+        report["joint_portfolio_candidates"] = [
+            {
+                "target": args.target,
+                "symbol": event.symbol,
+                "side": event.side,
+                "entry_at": event.entry_at,
+                "exit_at": event.exit_at,
+                "gross_return": event.gross_return,
+                "stop_fraction": event.stop_fraction,
+            }
+            for event in admitted_risk_fills
+        ]
         report["risk_sized_portfolio_30d"] = {
             "model": "one_percent_equity_risk_at_cost_inclusive_stop",
             "risk_fraction_per_planned_stop": .01,
