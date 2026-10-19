@@ -12,7 +12,7 @@ import math
 
 import pandas as pd
 
-from research.execution import net_after_costs
+from research.execution import net_after_costs, net_after_costs_short
 from research.portfolio import NET_30D_TARGET
 
 
@@ -23,6 +23,7 @@ class RiskFill:
     exit_at: str
     gross_return: float
     stop_fraction: float
+    side: str = 'long'
 
 
 def risk_portfolio_audit(
@@ -67,7 +68,7 @@ def risk_portfolio_audit(
             or not isinstance(fill.symbol, str) or not fill.symbol.strip()
             or not math.isfinite(fill.gross_return) or fill.gross_return <= -1
             or not math.isfinite(fill.stop_fraction) or
-            not 0 < fill.stop_fraction < 1):
+            not 0 < fill.stop_fraction < 1 or fill.side not in ('long', 'short')):
             raise ValueError("invalid fill / stop input")
         ordered.append((entry.tz_convert("UTC"), exit_.tz_convert("UTC"), fill))
     ordered.sort(key=lambda item: (item[0], item[2].symbol, item[1]))
@@ -112,7 +113,8 @@ def risk_portfolio_audit(
         if len(positions) >= max_concurrent_positions:
             skipped["capacity"] += 1
             continue
-        stop_net_loss = -net_after_costs(
+        cost_fn = net_after_costs_short if fill.side == 'short' else net_after_costs
+        stop_net_loss = -cost_fn(
             -fill.stop_fraction, fee_bps_per_side, slippage_bps_per_side)
         if stop_net_loss <= 0:
             raise ValueError("planned stop must imply positive cost-inclusive loss")
@@ -142,7 +144,7 @@ def risk_portfolio_audit(
             continue
 
         planned_loss = notional * stop_net_loss
-        net_return = net_after_costs(
+        net_return = cost_fn(
             fill.gross_return, fee_bps_per_side, slippage_bps_per_side)
         posted_margin = notional / effective_leverage
         positions.append((
