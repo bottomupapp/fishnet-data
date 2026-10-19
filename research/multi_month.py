@@ -70,12 +70,12 @@ def summarize(reports: list[dict]) -> dict:
             raise ValueError("risk based sizing or target is misconfigured")
         risk_summary = {}
         for group in ("ungated", "abstention"):
-            scenarios = risk_report.get(f"{group}_cost_sensitivity", {})
-            if set(scenarios) != set(SCENARIOS):
+            risk_scenarios = risk_report.get(f"{group}_cost_sensitivity", {})
+            if set(risk_scenarios) != set(SCENARIOS):
                 raise ValueError("missing risk portfolio cost scenarios")
             risk_summary[group] = {}
             for scenario in SCENARIOS:
-                record = scenarios[scenario]
+                record = risk_scenarios[scenario]
                 if record["release_approved"] is not False or record["risk_fraction_per_trade"] != .01:
                     raise ValueError("risk portfolio must be fail-closed")
                 risk_summary[group][scenario] = {
