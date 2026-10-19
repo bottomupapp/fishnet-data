@@ -41,11 +41,33 @@ def summarize(reports: list[dict]) -> dict:
         executed = int(gate["admitted_simulated"])
         if admitted < 0 or admitted > n or executed < 0 or executed > admitted:
             raise ValueError("invalid admission counts")
+        port = report.get("portfolio_30d")
+        if not port or port.get("release_approved") is not False:
+            raise ValueError("missing non-releasable portfolio audit")
+        portfolio_summary = {}
+        for name in ("ungated", "abstention"):
+            scenarios_30d = port.get(f"{name}_cost_sensitivity", {})
+            if set(scenarios_30d) != set(SCENARIOS):
+                raise ValueError("missing portfolio cost scenarios")
+            portfolio_summary[name] = {}
+            for scenario in SCENARIOS:
+                account = scenarios_30d[scenario]
+                if account["release_approved"] is not False:
+                    raise ValueError("portfolio audit cannot approve release")
+                if account["target_net_30d_return"] != .07:
+                    raise ValueError("portfolio goal must stay net 7 percent")
+                portfolio_summary[name][scenario] = {
+                    "net_equity_return": account["net_equity_return"],
+                    "max_realized_drawdown": account["max_realized_drawdown"],
+                    "executed_fills": account["executed_fills"],
+                    "target_met": account["net_30d_goal_met_in_development"],
+                }
         results.append({
             "test_start": report["test_start"],
             "test_end_exclusive": report["test_end_exclusive"],
             "test_rows": report["rows"]["test"],
             "selected_signals": n,
+            "portfolio_30d": portfolio_summary,
             "research_gate": {
                 "admitted": admitted,
                 "simulated": executed,
@@ -64,6 +86,9 @@ def summarize(reports: list[dict]) -> dict:
     gated_returns = [r["research_gate"]["mean_net_return"] for r in results]
     gated_enough = all(r["research_gate"]["simulated"] >= 20 for r in results)
     gated_consistent = gated_enough and all(v is not None and v > 0 for v in gated_returns)
+    portfolio_net7_each_dev_fold = all(
+        r["portfolio_30d"]["abstention"]["base"]["target_met"] for r in results
+    )
     base_returns = [r["costs"]["base"]["mean_net_return"] for r in results]
     enough = all(r["selected_signals"] >= 20 for r in results)
     consistent = enough and all(v is not None and v > 0 for v in base_returns)
@@ -75,6 +100,7 @@ def summarize(reports: list[dict]) -> dict:
         "folds": results,
         "development_consistency_gate_passed": consistent,
         "abstention_development_consistency_gate_passed": gated_consistent,
+        "net_7pct_30d_development_goal_met_all_folds": portfolio_net7_each_dev_fold,
         "release_approved": False,
         "warning": (
             "No live approval even when the development gate passes. "
