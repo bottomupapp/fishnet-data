@@ -1,0 +1,58 @@
+name: Fishnet five-major expansion experiment
+on:
+  pull_request:
+    paths:
+      - 'research/major_expansion.py'
+      - 'research/test_major_expansion.py'
+      - '.github/workflows/five-major-expansion.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  five-major-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+            data/SOLUSDT
+            data/BNBUSDT
+            data/XRPUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas pyarrow lightgbm
+      - name: Run major-coin readiness unit tests
+        run: python -m unittest discover -s research -p 'test_*.py' -v
+      - name: Build five-coin point-in-time research dataset
+        run: |
+          python - <<'PY'
+          from research.features import build
+          build('data', ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT']).to_parquet('/tmp/fishnet-five-major-features.parquet', compression='zstd')
+          PY
+      - name: Verify complete five-coin data and labels
+        run: python -m research.major_expansion /tmp/fishnet-five-major-features.parquet --output /tmp/five-major-readiness.json
+      - name: Evaluate 15m LONG with existing cost and risk model
+        run: |
+          python -m research.dev_baseline /tmp/fishnet-five-major-features.parquet \
+            --output /tmp/fishnet-five-major-long15.json --target y_long_15 \
+            --test-start 2026-07-17 --cost-audit-root data --rounds 100
+      - name: Evaluate 15m SHORT under same assumptions
+        run: |
+          python -m research.dev_baseline /tmp/fishnet-five-major-features.parquet \
+            --output /tmp/fishnet-five-major-short15.json --target y_short_15 \
+            --test-start 2026-07-17 --cost-audit-root data --rounds 100
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-five-major-research
+          path: |
+            /tmp/five-major-readiness.json
+            /tmp/fishnet-five-major-long15.json
+            /tmp/fishnet-five-major-short15.json
+          retention-days: 30
