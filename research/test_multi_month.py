@@ -8,6 +8,13 @@ def report(start: str, mean: float = .0001, selected: int = 25) -> dict:
         "test_start": f"{start} 00:00:00+00:00",
         "test_end_exclusive": "2026-08-16 00:00:00+00:00",
         "rows": {"test": 8640},
+        "research_abstention": {
+            "release_approved": False,
+            "gate_admitted": selected,
+            "admitted_simulated": selected,
+            "mean_net_return_per_admitted_trade": mean,
+            "gate_decisions": {"research_candidate_only": selected},
+        },
         "execution_audit": {
             "status": "illustrative_cost_assumptions_not_live_execution",
             "selected": selected,
@@ -35,6 +42,19 @@ class MultiMonthReleaseSafetyTests(unittest.TestCase):
         reports = [report(x) for x in FOLDS]
         reports[0] = report(FOLDS[0], selected=12)
         self.assertFalse(summarize(reports)["development_consistency_gate_passed"])
+
+    def test_gate_cannot_approve_negative_month(self):
+        reports = [report(x) for x in FOLDS]
+        reports[1]["research_abstention"]["mean_net_return_per_admitted_trade"] = -.0005
+        result = summarize(reports)
+        self.assertFalse(result["abstention_development_consistency_gate_passed"])
+        self.assertFalse(result["release_approved"])
+
+    def test_gate_refuses_invalid_count(self):
+        reports = [report(x) for x in FOLDS]
+        reports[1]["research_abstention"]["gate_admitted"] = 26
+        with self.assertRaises(ValueError):
+            summarize(reports)
 
     def test_missing_month_is_rejected(self):
         with self.assertRaises(ValueError):
