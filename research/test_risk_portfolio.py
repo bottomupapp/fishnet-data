@@ -73,6 +73,25 @@ class RiskPortfolioTests(unittest.TestCase):
         self.assertLessEqual(out["max_active_gross_exposure_to_equity"], 1.00000001)
         self.assertLess(out["mean_realized_r_on_planned_stop_risk"], 20)
 
+    def test_concurrent_long_and_short_on_distinct_majors(self):
+        a = trade("BTCUSDT", at=0, gross=.01, stop=.01)
+        b = trade("ETHUSDT", at=0, gross=.01, stop=.01)
+        opposite = RiskFill(b.symbol, b.entry_at, b.exit_at,
+                            b.gross_return, b.stop_fraction, side="short")
+        result = risk_portfolio_audit([a, opposite], max_concurrent_positions=2)
+        self.assertEqual(result["executed_fills"], 2)
+        self.assertEqual(result["skipped_fills"]["capacity"], 0)
+        self.assertLessEqual(result["max_simultaneous_planned_risk_fraction_of_equity"], .0200001)
+        self.assertFalse(result["release_approved"])
+
+    def test_opposite_direction_same_symbol_requires_explicit_hedge_mode(self):
+        long_fill = trade("BTCUSDT", at=0, gross=.01, stop=.01)
+        short_fill = RiskFill(long_fill.symbol, long_fill.entry_at, long_fill.exit_at,
+                              .01, .01, side="short")
+        result = risk_portfolio_audit([long_fill, short_fill], max_concurrent_positions=2)
+        self.assertEqual(result["executed_fills"], 1)
+        self.assertEqual(result["skipped_fills"]["symbol_overlap"], 1)
+
     def test_overlap_and_capacity_skip_additional_positions(self):
         fills = [trade(at=0), trade(at=1), trade("ETHUSDT", at=1)]
         a = risk_portfolio_audit(fills, max_concurrent_positions=1)
