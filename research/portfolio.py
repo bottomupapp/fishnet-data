@@ -36,7 +36,8 @@ def portfolio_audit(
     At every entry, settle positions with exits <= that entry. Reserve notional
     across overlapping positions and forbid overlapping positions in the same
     symbol. No leverage; idle cash is included in the equity denominator.
-    Exit timestamps identify 1-minute bars, so capital remains reserved through\n    that exit minute. Positions held through a price excursion are *not* MTM valued here:
+    Exit timestamps identify 1-minute bars, so capital remains reserved through
+    that exit minute. Positions held through a price excursion are *not* MTM valued here:
     max_realized_drawdown understates true mark-to-market drawdown.
     """
     if not math.isfinite(starting_capital) or starting_capital <= 0:
