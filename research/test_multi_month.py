@@ -8,6 +8,29 @@ def report(start: str, mean: float = .0001, selected: int = 25) -> dict:
         "test_start": f"{start} 00:00:00+00:00",
         "test_end_exclusive": "2026-08-16 00:00:00+00:00",
         "rows": {"test": 8640},
+        "risk_sized_portfolio_30d": {
+            "release_approved": False,
+            "risk_fraction_per_planned_stop": .01,
+            "target_net_return_per_30_day_dev_window": .07,
+            "ungated_cost_sensitivity": {
+                name: {"release_approved": False, "risk_fraction_per_trade": .01,
+                       "net_equity_return": mean, "net_30d_goal_met_in_development": mean >= .07,
+                       "executed_fills": selected, "max_realized_only_drawdown": 0,
+                       "max_active_gross_exposure_to_equity": 1,
+                       "highest_effective_leverage_used": 5,
+                       "mean_realized_r_on_planned_stop_risk": .5}
+                for name in SCENARIOS
+            },
+            "abstention_cost_sensitivity": {
+                name: {"release_approved": False, "risk_fraction_per_trade": .01,
+                       "net_equity_return": mean, "net_30d_goal_met_in_development": mean >= .07,
+                       "executed_fills": selected, "max_realized_only_drawdown": 0,
+                       "max_active_gross_exposure_to_equity": 1,
+                       "highest_effective_leverage_used": 5,
+                       "mean_realized_r_on_planned_stop_risk": .5}
+                for name in SCENARIOS
+            },
+        },
         "portfolio_30d": {
             "release_approved": False,
             "ungated_cost_sensitivity": {
@@ -86,6 +109,18 @@ class MultiMonthReleaseSafetyTests(unittest.TestCase):
     def test_portfolio_not_approved_fails_closed(self):
         reports = [report(x) for x in FOLDS]
         reports[0]["portfolio_30d"]["release_approved"] = True
+        with self.assertRaises(ValueError):
+            summarize(reports)
+
+    def test_risk_sized_net_seven_percent_goal_remains_research_only(self):
+        reports = [report(x, mean=.08) for x in FOLDS]
+        result = summarize(reports)
+        self.assertTrue(result["risk_sized_net_7pct_30d_development_goal_met_all_folds"])
+        self.assertFalse(result["release_approved"])
+
+    def test_invalid_risk_fraction_fails_closed(self):
+        reports = [report(x) for x in FOLDS]
+        reports[0]["risk_sized_portfolio_30d"]["risk_fraction_per_planned_stop"] = .02
         with self.assertRaises(ValueError):
             summarize(reports)
 
