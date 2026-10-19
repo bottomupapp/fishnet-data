@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.execution import simulate_long
+from research.execution import simulate_long, net_after_costs
 
 
 class ConservativeExecutionTests(unittest.TestCase):
@@ -61,6 +61,19 @@ class ConservativeExecutionTests(unittest.TestCase):
     def test_needs_complete_future_horizon(self):
         with self.assertRaisesRegex(ValueError, "insufficient"):
             simulate_long(self.bars, self.times[8], .002, 5)
+
+    def test_higher_costs_cannot_improve_return(self):
+        gross = 0.003
+        lower = net_after_costs(gross, 3, 1)
+        base = net_after_costs(gross, 6, 3)
+        adverse = net_after_costs(gross, 10, 6)
+        self.assertGreater(lower, base)
+        self.assertGreater(base, adverse)
+
+    def test_cost_utility_rejects_invalid_assumptions(self):
+        for gross, fee, slip in ((float("nan"), 6, 3), (0.001, -1, 3), (-1.1, 6, 3)):
+            with self.assertRaises(ValueError):
+                net_after_costs(gross, fee, slip)
 
     def test_cannot_assume_impossible_immediate_fill(self):
         with self.assertRaisesRegex(ValueError, "at least two"):
