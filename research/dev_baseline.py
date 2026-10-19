@@ -11,6 +11,7 @@ from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, de
 from research.execution import simulate_long, load_historical_bars, net_after_costs
 from research.admission import evaluate_admission
 from research.portfolio import CandidateFill, portfolio_audit
+from research.risk_portfolio import RiskFill, risk_portfolio_audit
 
 def main():
     ap=argparse.ArgumentParser()
@@ -65,6 +66,8 @@ def main():
         admitted_fills = []
         all_portfolio_fills = []
         admitted_portfolio_fills = []
+        all_risk_fills = []
+        admitted_risk_fills = []
         gate_decisions = {}
         for symbol, group in selected.groupby("symbol"):
             bars = load_historical_bars(args.cost_audit_root, symbol, end)
@@ -85,9 +88,15 @@ def main():
                     all_fills.append(fill)
                     event = (str(symbol), fill)
                     all_portfolio_fills.append(event)
+                    risk_event = RiskFill(
+                        str(symbol), fill.entry_at, fill.exit_at, fill.gross_return,
+                        float(getattr(row, f"barrier_{hz}")),
+                    )
+                    all_risk_fills.append(risk_event)
                     if admission.admitted:
                         admitted_fills.append(fill)
                         admitted_portfolio_fills.append(event)
+                        admitted_risk_fills.append(risk_event)
                 except ValueError as exc:
                     reason = str(exc)
                     refused[reason] = refused.get(reason, 0) + 1
@@ -177,6 +186,32 @@ def main():
             },
             "abstention_cost_sensitivity": {
                 name: equity_report(admitted_portfolio_fills, fee, slip)
+                for name, fee, slip in stress
+            },
+            "release_approved": False,
+        }
+        # Leverage is only a collateral tool. Stop-distance including fees sets
+        # notional; the equity-risk budget remains 1% per planned stopped trade.
+        def risk_report(events, fee, slip):
+            return risk_portfolio_audit(
+                events, starting_capital=10000., risk_fraction=.01,
+                max_leverage=20., max_gross_exposure=6.,
+                max_concurrent_positions=2,
+                fee_bps_per_side=fee, slippage_bps_per_side=slip,
+            )
+
+        report["risk_sized_portfolio_30d"] = {
+            "model": "one_percent_equity_risk_at_cost_inclusive_stop",
+            "risk_fraction_per_planned_stop": .01,
+            "max_leverage": 20.,
+            "max_total_gross_exposure_multiple": 6.,
+            "target_net_return_per_30_day_dev_window": .07,
+            "ungated_cost_sensitivity": {
+                name: risk_report(all_risk_fills, fee, slip)
+                for name, fee, slip in stress
+            },
+            "abstention_cost_sensitivity": {
+                name: risk_report(admitted_risk_fills, fee, slip)
                 for name, fee, slip in stress
             },
             "release_approved": False,

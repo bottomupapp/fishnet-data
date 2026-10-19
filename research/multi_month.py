@@ -62,12 +62,38 @@ def summarize(reports: list[dict]) -> dict:
                     "executed_fills": account["executed_fills"],
                     "target_met": account["net_30d_goal_met_in_development"],
                 }
+        risk_report = report.get("risk_sized_portfolio_30d")
+        if not risk_report or risk_report.get("release_approved") is not False:
+            raise ValueError("missing non-releasable stop-risk portfolio report")
+        if (risk_report.get("risk_fraction_per_planned_stop") != .01
+            or risk_report.get("target_net_return_per_30_day_dev_window") != .07):
+            raise ValueError("risk based sizing or target is misconfigured")
+        risk_summary = {}
+        for group in ("ungated", "abstention"):
+            risk_scenarios = risk_report.get(f"{group}_cost_sensitivity", {})
+            if set(risk_scenarios) != set(SCENARIOS):
+                raise ValueError("missing risk portfolio cost scenarios")
+            risk_summary[group] = {}
+            for scenario in SCENARIOS:
+                record = risk_scenarios[scenario]
+                if record["release_approved"] is not False or record["risk_fraction_per_trade"] != .01:
+                    raise ValueError("risk portfolio must be fail-closed")
+                risk_summary[group][scenario] = {
+                    "net_equity_return": record["net_equity_return"],
+                    "target_met": record["net_30d_goal_met_in_development"],
+                    "executed_fills": record["executed_fills"],
+                    "max_realized_only_drawdown": record["max_realized_only_drawdown"],
+                    "max_active_gross_exposure_to_equity": record["max_active_gross_exposure_to_equity"],
+                    "highest_effective_leverage_used": record["highest_effective_leverage_used"],
+                    "mean_realized_r": record["mean_realized_r_on_planned_stop_risk"],
+                }
         results.append({
             "test_start": report["test_start"],
             "test_end_exclusive": report["test_end_exclusive"],
             "test_rows": report["rows"]["test"],
             "selected_signals": n,
             "portfolio_30d": portfolio_summary,
+            "risk_sized_portfolio_30d": risk_summary,
             "research_gate": {
                 "admitted": admitted,
                 "simulated": executed,
@@ -89,6 +115,10 @@ def summarize(reports: list[dict]) -> dict:
     portfolio_net7_each_dev_fold = all(
         r["portfolio_30d"]["abstention"]["base"]["target_met"] for r in results
     )
+    risk_sized_net7_each_dev_fold = all(
+        r["risk_sized_portfolio_30d"]["abstention"]["base"]["target_met"]
+        for r in results
+    )
     base_returns = [r["costs"]["base"]["mean_net_return"] for r in results]
     enough = all(r["selected_signals"] >= 20 for r in results)
     consistent = enough and all(v is not None and v > 0 for v in base_returns)
@@ -101,6 +131,7 @@ def summarize(reports: list[dict]) -> dict:
         "development_consistency_gate_passed": consistent,
         "abstention_development_consistency_gate_passed": gated_consistent,
         "net_7pct_30d_development_goal_met_all_folds": portfolio_net7_each_dev_fold,
+        "risk_sized_net_7pct_30d_development_goal_met_all_folds": risk_sized_net7_each_dev_fold,
         "release_approved": False,
         "warning": (
             "No live approval even when the development gate passes. "
