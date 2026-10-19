@@ -5,6 +5,7 @@ from research.multi_month import FOLDS, SCENARIOS, summarize
 
 def report(start: str, mean: float = .0001, selected: int = 25) -> dict:
     return {
+        "target": "y_long_15",
         "test_start": f"{start} 00:00:00+00:00",
         "test_end_exclusive": "2026-08-16 00:00:00+00:00",
         "rows": {"test": 8640},
@@ -123,6 +124,18 @@ class MultiMonthReleaseSafetyTests(unittest.TestCase):
         reports[0]["risk_sized_portfolio_30d"]["risk_fraction_per_planned_stop"] = .02
         with self.assertRaises(ValueError):
             summarize(reports)
+
+    def test_short_and_long_models_must_not_mix_across_folds(self):
+        reports = [report(x) for x in FOLDS]
+        reports[2]["target"] = "y_short_60"
+        with self.assertRaises(ValueError):
+            summarize(reports)
+
+    def test_short_horizon_is_preserved(self):
+        reports = [report(x) for x in FOLDS]
+        for r in reports:
+            r["target"] = "y_short_5"
+        self.assertEqual(summarize(reports)["target"], "y_short_5")
 
     def test_missing_month_is_rejected(self):
         with self.assertRaises(ValueError):

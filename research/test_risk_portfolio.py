@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from research.execution import net_after_costs
+from research.execution import net_after_costs, net_after_costs_short
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
 
 
@@ -31,6 +31,34 @@ class RiskPortfolioTests(unittest.TestCase):
         self.assertAlmostEqual(out["mean_realized_r_on_planned_stop_risk"], 3.2, places=10)
         self.assertFalse(out["release_approved"])
 
+    def test_short_planned_stop_including_costs_is_one_percent(self):
+        position = trade(gross=-.01, stop=.01)
+        position = RiskFill(position.symbol, position.entry_at, position.exit_at,
+                            position.gross_return, position.stop_fraction, side="short")
+        out = risk_portfolio_audit([position])
+        self.assertAlmostEqual(out["net_equity_return"], -.01, places=10)
+        self.assertAlmostEqual(out["mean_realized_r_on_planned_stop_risk"], -1, places=10)
+
+    def test_short_risk_budget_three_r_net(self):
+        fee, slip = 6., 3.
+        stop=.008
+        cost_loss = -net_after_costs_short(-stop, fee, slip)
+        wanted = 3.0 * cost_loss
+        sell=(1 - fee/10000)*(1 - slip/10000)
+        buy=(1 + fee/10000)*(1 + slip/10000)
+        gross = 1 - (1 - wanted) * sell / buy
+        base = trade(gross=gross, stop=stop)
+        short = RiskFill(base.symbol,base.entry_at,base.exit_at,
+                         base.gross_return,base.stop_fraction,side="short")
+        out=risk_portfolio_audit([short])
+        self.assertAlmostEqual(out["net_equity_return"],.03,places=9)
+
+    def test_unrecognized_trade_side_fails_closed(self):
+        base=trade()
+        with self.assertRaises(ValueError):
+            risk_portfolio_audit([RiskFill(base.symbol,base.entry_at,base.exit_at,
+                                           base.gross_return,base.stop_fraction,side="unknown")])
+
     def test_more_leverage_does_not_increase_return_without_exposure_change(self):
         item = [trade(gross=.02, stop=.01)]
         a = risk_portfolio_audit(item, max_leverage=10)
@@ -44,6 +72,25 @@ class RiskPortfolioTests(unittest.TestCase):
         )
         self.assertLessEqual(out["max_active_gross_exposure_to_equity"], 1.00000001)
         self.assertLess(out["mean_realized_r_on_planned_stop_risk"], 20)
+
+    def test_concurrent_long_and_short_on_distinct_majors(self):
+        a = trade("BTCUSDT", at=0, gross=.01, stop=.01)
+        b = trade("ETHUSDT", at=0, gross=.01, stop=.01)
+        opposite = RiskFill(b.symbol, b.entry_at, b.exit_at,
+                            b.gross_return, b.stop_fraction, side="short")
+        result = risk_portfolio_audit([a, opposite], max_concurrent_positions=2)
+        self.assertEqual(result["executed_fills"], 2)
+        self.assertEqual(result["skipped_fills"]["capacity"], 0)
+        self.assertLessEqual(result["max_simultaneous_planned_risk_fraction_of_equity"], .0200001)
+        self.assertFalse(result["release_approved"])
+
+    def test_opposite_direction_same_symbol_requires_explicit_hedge_mode(self):
+        long_fill = trade("BTCUSDT", at=0, gross=.01, stop=.01)
+        short_fill = RiskFill(long_fill.symbol, long_fill.entry_at, long_fill.exit_at,
+                              .01, .01, side="short")
+        result = risk_portfolio_audit([long_fill, short_fill], max_concurrent_positions=2)
+        self.assertEqual(result["executed_fills"], 1)
+        self.assertEqual(result["skipped_fills"]["symbol_overlap"], 1)
 
     def test_overlap_and_capacity_skip_additional_positions(self):
         fills = [trade(at=0), trade(at=1), trade("ETHUSDT", at=1)]

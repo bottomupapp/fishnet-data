@@ -20,6 +20,11 @@ def summarize(reports: list[dict]) -> dict:
     if len(reports) != len(FOLDS):
         raise ValueError("expected exactly four completed development folds")
     actual = tuple(report["test_start"][:10] for report in reports)
+    expected_target = reports[0]["target"]
+    if expected_target not in ("y_long_5", "y_short_5", "y_long_15", "y_short_15", "y_long_60", "y_short_60"):
+        raise ValueError("invalid target")
+    if any(report.get("target") != expected_target for report in reports):
+        raise ValueError("mixed model targets in development report")
     if actual != FOLDS:
         raise ValueError("unexpected development fold windows")
     results = []
@@ -123,9 +128,9 @@ def summarize(reports: list[dict]) -> dict:
     enough = all(r["selected_signals"] >= 20 for r in results)
     consistent = enough and all(v is not None and v > 0 for v in base_returns)
     return {
-        "experiment": "fishnet-btc-eth-long15-fourfold-cost-audit-v1",
+        "experiment": "fishnet-btc-eth-six-target-grid-fourfold-v1",
         "mode": "historical_development_only",
-        "target": "y_long_15",
+        "target": expected_target,
         "holdout_start": "2026-08-17T00:00:00Z",
         "folds": results,
         "development_consistency_gate_passed": consistent,
@@ -147,6 +152,7 @@ def main() -> None:
     ap.add_argument("bars_root")
     ap.add_argument("--output", required=True)
     ap.add_argument("--rounds", type=int, default=100)
+    ap.add_argument("--target", choices=("y_long_5", "y_short_5", "y_long_15", "y_short_15", "y_long_60", "y_short_60"), default="y_long_15")
     args = ap.parse_args()
     if args.rounds < 1:
         raise ValueError("rounds must be positive")
@@ -154,11 +160,11 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     reports = []
     for start in FOLDS:
-        file = output.parent / f"fishnet-{start}-dev.json"
+        file = output.parent / f"fishnet-{args.target}-{start}-dev.json"
         subprocess.run([
             sys.executable, "-m", "research.dev_baseline", args.features,
             "--output", str(file), "--rounds", str(args.rounds),
-            "--target", "y_long_15", "--test-start", start,
+            "--target", args.target, "--test-start", start,
             "--cost-audit-root", args.bars_root,
         ], check=True)
         reports.append(json.loads(file.read_text()))

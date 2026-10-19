@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
-from research.execution import simulate_long, load_historical_bars, net_after_costs
+from research.execution import simulate_long, simulate_short, load_historical_bars, net_after_costs, net_after_costs_short
 from research.admission import evaluate_admission
 from research.portfolio import CandidateFill, portfolio_audit
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
@@ -29,6 +29,8 @@ def main():
     df=pd.read_parquet(args.data)
     df["t"]=pd.to_datetime(df["t"],utc=True)
     df=df[df.t < HOLDOUT_START-EMBARGO].copy()
+    if args.target not in ("y_long_5", "y_short_5", "y_long_15", "y_short_15", "y_long_60", "y_short_60"):
+        raise ValueError("unsupported target")
     if args.target not in df: raise ValueError("unknown target")
     purge=pd.Timedelta(minutes=60)
     cal_start=a-EMBARGO-pd.Timedelta(days=30)
@@ -41,6 +43,9 @@ def main():
     model=lgb.train(dict(PARAMS),dataset,num_boost_round=args.rounds)
     y=args.target
     hz=int(y.rsplit("_",1)[-1])
+    side=y.split('_')[1]
+    simulator=simulate_long if side == 'long' else simulate_short
+    cost_function=net_after_costs if side == 'long' else net_after_costs_short
     test_predictions=model.predict(test[cols])
     calibration_predictions=model.predict(cal[cols])
     result=score(test,test_predictions,y,hz,calibration_predictions)
@@ -48,7 +53,7 @@ def main():
     for symbol in sorted(test["symbol"].unique()):
         mask=(test["symbol"]==symbol).to_numpy()
         by_symbol[str(symbol)]=score(test.loc[mask],test_predictions[mask],y,hz,calibration_predictions)
-    report={"target":y,"test_start":str(a),"test_end_exclusive":str(end),
+    report={"target":y,"side":side,"test_start":str(a),"test_end_exclusive":str(end),
             "holdout_locked_from":str(HOLDOUT_START),"rounds":args.rounds,
             "rows":{"train":len(train),"cal":len(cal),"test":len(test)},
             "features":len(cols),"metrics":result,"by_symbol":by_symbol,
@@ -80,7 +85,7 @@ def main():
                 )
                 gate_decisions[admission.reason] = gate_decisions.get(admission.reason, 0) + 1
                 try:
-                    fill = simulate_long(
+                    fill = simulator(
                         bars, pd.Timestamp(row.t), float(getattr(row, f"barrier_{hz}")), hz,
                         entry_delay_minutes=2, fee_bps_per_side=6, slippage_bps_per_side=3,
                     )
@@ -90,7 +95,7 @@ def main():
                     all_portfolio_fills.append(event)
                     risk_event = RiskFill(
                         str(symbol), fill.entry_at, fill.exit_at, fill.gross_return,
-                        float(getattr(row, f"barrier_{hz}")),
+                        float(getattr(row, f"barrier_{hz}")), side,
                     )
                     all_risk_fills.append(risk_event)
                     if admission.admitted:
@@ -132,11 +137,11 @@ def main():
                 "fee_bps_per_side": fee,
                 "slippage_bps_per_side": slip,
                 "mean_net_return_per_simulated_trade": (
-                    float(np.mean([net_after_costs(x.gross_return, fee, slip) for x in all_fills]))
+                    float(np.mean([cost_function(x.gross_return, fee, slip) for x in all_fills]))
                     if all_fills else None
                 ),
                 "net_positive_fraction": (
-                    float(np.mean([net_after_costs(x.gross_return, fee, slip) > 0 for x in all_fills]))
+                    float(np.mean([cost_function(x.gross_return, fee, slip) > 0 for x in all_fills]))
                     if all_fills else None
                 ),
             }
@@ -158,7 +163,7 @@ def main():
                 {
                     "scenario": name,
                     "mean_net_return_per_admitted_trade": (
-                        float(np.mean([net_after_costs(x.gross_return, fee, slip) for x in admitted_fills]))
+                        float(np.mean([cost_function(x.gross_return, fee, slip) for x in admitted_fills]))
                         if admitted_fills else None
                     ),
                 }
@@ -172,7 +177,7 @@ def main():
             return portfolio_audit([
                 CandidateFill(
                     symbol=symbol, entry_at=fill.entry_at, exit_at=fill.exit_at,
-                    net_return=net_after_costs(fill.gross_return, fee, slip),
+                    net_return=cost_function(fill.gross_return, fee, slip),
                 ) for symbol, fill in events
             ], starting_capital=10000, stake_fraction=.10, max_concurrent_positions=2)
 
