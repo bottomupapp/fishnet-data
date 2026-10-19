@@ -51,7 +51,7 @@ def main():
             "features":len(cols),"metrics":result,"by_symbol":by_symbol,
             "warning":"Research-only barrier hit rates, not returns or proof of profitability. Entry at next minute open may be unrealistically optimistic without decision and routing latency; no holdout evaluation."}
     if args.cost_audit_root:
-        if "barrier_15" not in df.columns:
+        if f"barrier_{hz}" not in df.columns:
             raise ValueError("missing training barrier for execution audit")
         # Use the same preceding-month probability threshold as the printed top-1% score.
         threshold = float(result["top0.01"]["thr"])
