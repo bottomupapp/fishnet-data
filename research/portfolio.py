@@ -36,7 +36,7 @@ def portfolio_audit(
     At every entry, settle positions with exits <= that entry. Reserve notional
     across overlapping positions and forbid overlapping positions in the same
     symbol. No leverage; idle cash is included in the equity denominator.
-    Positions held through a price excursion are *not* MTM valued here:
+    Exit timestamps identify 1-minute bars, so capital remains reserved through\n    that exit minute. Positions held through a price excursion are *not* MTM valued here:
     max_realized_drawdown understates true mark-to-market drawdown.
     """
     if not math.isfinite(starting_capital) or starting_capital <= 0:
@@ -49,7 +49,7 @@ def portfolio_audit(
     ordered = []
     for fill in fills:
         start, end = pd.Timestamp(fill.entry_at), pd.Timestamp(fill.exit_at)
-        if (start.tzinfo is None or end.tzinfo is None or start >= end
+        if (start.tzinfo is None or end.tzinfo is None or start > end
             or not isinstance(fill.symbol, str) or not fill.symbol.strip()
             or not math.isfinite(fill.net_return) or fill.net_return <= -1):
             raise ValueError("invalid or timezone-naive fill")
@@ -87,7 +87,7 @@ def portfolio_audit(
         if notional <= 0 or not math.isfinite(notional):
             skipped["capital"] += 1
             continue
-        positions.append((end, fill.symbol, notional, fill.net_return))
+        positions.append((end + pd.Timedelta(minutes=1), fill.symbol, notional, fill.net_return))
         executed += 1
     settle(None)
 
