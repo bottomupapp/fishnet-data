@@ -45,6 +45,8 @@ def aggregate(reports: list[dict]) -> dict:
                 raise ValueError("invalid net portfolio return")
             if not isinstance(trades, int) or trades < 0 or not 0 <= dd <= 1:
                 raise ValueError("invalid capacity or drawdown")
+            if bool(entry["target_met"]) != bool(net >= .07):
+                raise ValueError("target flag contradicts recorded net equity return")
             rows.append({
                 "start": str(f["test_start"])[:10],
                 "net_30day_equity_return": net,
