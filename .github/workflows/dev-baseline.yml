@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'research/dev_baseline.py'
+      - 'research/execution.py'
+      - 'research/test_execution.py'
       - '.github/workflows/dev-baseline.yml'
   workflow_dispatch:
 permissions:
@@ -30,7 +32,7 @@ jobs:
           build('data', ['BTCUSDT','ETHUSDT']).to_parquet('/tmp/fishnet-features.parquet',compression='zstd')
           PY
       - name: Train and score one development fold (no holdout)
-        run: python -m research.dev_baseline /tmp/fishnet-features.parquet --output /tmp/fishnet-dev-report.json --rounds 100 --target y_long_15
+        run: python -m research.dev_baseline /tmp/fishnet-features.parquet --output /tmp/fishnet-dev-report.json --rounds 100 --target y_long_15 --cost-audit-root data
       - uses: actions/upload-artifact@v4
         if: success()
         with:
