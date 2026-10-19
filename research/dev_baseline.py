@@ -9,6 +9,7 @@ import pandas as pd
 import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
 from research.execution import simulate_long, load_historical_bars, net_after_costs
+from research.admission import evaluate_admission
 
 def main():
     ap=argparse.ArgumentParser()
@@ -60,11 +61,18 @@ def main():
         selected = dedupe(selected[selected["model_probability"] >= threshold], hz)
         by_symbol = {}
         all_fills = []
+        admitted_fills = []
+        gate_decisions = {}
         for symbol, group in selected.groupby("symbol"):
             bars = load_historical_bars(args.cost_audit_root, symbol, end)
             fills = []
             refused = {}
             for row in group.itertuples(index=False):
+                admission = evaluate_admission(
+                    float(row.model_probability), float(getattr(row, f"barrier_{hz}")),
+                    fee_bps_per_side=6.0, slippage_bps_per_side=3.0, uncertainty_buffer_bps=5.0,
+                )
+                gate_decisions[admission.reason] = gate_decisions.get(admission.reason, 0) + 1
                 try:
                     fill = simulate_long(
                         bars, pd.Timestamp(row.t), float(getattr(row, f"barrier_{hz}")), hz,
@@ -72,6 +80,8 @@ def main():
                     )
                     fills.append(fill)
                     all_fills.append(fill)
+                    if admission.admitted:
+                        admitted_fills.append(fill)
                 except ValueError as exc:
                     reason = str(exc)
                     refused[reason] = refused.get(reason, 0) + 1
@@ -118,6 +128,29 @@ def main():
             for name, fee, slip in stress
         ]
         report["execution_audit"]["approved_as_trading_signal"] = False
+        report["research_abstention"] = {
+            "policy": "symmetric_barrier_proxy_minus_roundtrip_cost_and_5bp_uncertainty_buffer",
+            "validation": "unvalidated research-only proxy; not calibrated to delayed-fill returns",
+            "baseline_selected": int(len(selected)),
+            "gate_admitted": gate_decisions.get("research_candidate_only", 0),
+            "admitted_simulated": len(admitted_fills),
+            "gate_decisions": gate_decisions,
+            "mean_net_return_per_admitted_trade": (
+                float(np.mean([x.net_return for x in admitted_fills]))
+                if admitted_fills else None
+            ),
+            "cost_sensitivity": [
+                {
+                    "scenario": name,
+                    "mean_net_return_per_admitted_trade": (
+                        float(np.mean([net_after_costs(x.gross_return, fee, slip) for x in admitted_fills]))
+                        if admitted_fills else None
+                    ),
+                }
+                for name, fee, slip in stress
+            ],
+            "release_approved": False,
+        }
     out=Path(args.output);out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))

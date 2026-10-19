@@ -6,6 +6,8 @@ on:
       - 'research/test_multi_month.py'
       - 'research/dev_baseline.py'
       - 'research/execution.py'
+      - 'research/admission.py'
+      - 'research/test_admission.py'
       - '.github/workflows/multi-month-cost.yml'
   workflow_dispatch:
 

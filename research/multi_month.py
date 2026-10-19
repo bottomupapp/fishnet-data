@@ -34,11 +34,25 @@ def summarize(reports: list[dict]) -> dict:
         scenarios = {s["scenario"]: s for s in ex["cost_sensitivity"]}
         if set(scenarios) != set(SCENARIOS):
             raise ValueError("missing expected transaction-cost scenario")
+        gate = report.get("research_abstention")
+        if not gate or gate.get("release_approved") is not False:
+            raise ValueError("missing fail-closed research admission report")
+        admitted = int(gate["gate_admitted"])
+        executed = int(gate["admitted_simulated"])
+        if admitted < 0 or admitted > n or executed < 0 or executed > admitted:
+            raise ValueError("invalid admission counts")
         results.append({
             "test_start": report["test_start"],
             "test_end_exclusive": report["test_end_exclusive"],
             "test_rows": report["rows"]["test"],
             "selected_signals": n,
+            "research_gate": {
+                "admitted": admitted,
+                "simulated": executed,
+                "coverage": float(admitted / n) if n else None,
+                "mean_net_return": gate["mean_net_return_per_admitted_trade"],
+                "decisions": gate["gate_decisions"],
+            },
             "costs": {
                 key: {
                     "mean_net_return": scenarios[key]["mean_net_return_per_simulated_trade"],
@@ -47,6 +61,9 @@ def summarize(reports: list[dict]) -> dict:
                 for key in SCENARIOS
             },
         })
+    gated_returns = [r["research_gate"]["mean_net_return"] for r in results]
+    gated_enough = all(r["research_gate"]["simulated"] >= 20 for r in results)
+    gated_consistent = gated_enough and all(v is not None and v > 0 for v in gated_returns)
     base_returns = [r["costs"]["base"]["mean_net_return"] for r in results]
     enough = all(r["selected_signals"] >= 20 for r in results)
     consistent = enough and all(v is not None and v > 0 for v in base_returns)
@@ -57,6 +74,7 @@ def summarize(reports: list[dict]) -> dict:
         "holdout_start": "2026-08-17T00:00:00Z",
         "folds": results,
         "development_consistency_gate_passed": consistent,
+        "abstention_development_consistency_gate_passed": gated_consistent,
         "release_approved": False,
         "warning": (
             "No live approval even when the development gate passes. "
