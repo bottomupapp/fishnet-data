@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
-from research.execution import simulate_long, load_historical_bars
+from research.execution import simulate_long, load_historical_bars, net_after_costs
 
 def main():
     ap=argparse.ArgumentParser()
@@ -100,6 +100,24 @@ def main():
             "by_symbol": by_symbol,
             "limitations": "Not portfolio PnL; assumed t+2 open fills, fixed costs, no funding, partial fills or measured routing latency.",
         }
+        stress = (("lower_cost", 3.0, 1.0), ("base", 6.0, 3.0), ("higher_cost", 10.0, 6.0))
+        report["execution_audit"]["cost_sensitivity"] = [
+            {
+                "scenario": name,
+                "fee_bps_per_side": fee,
+                "slippage_bps_per_side": slip,
+                "mean_net_return_per_simulated_trade": (
+                    float(np.mean([net_after_costs(x.gross_return, fee, slip) for x in all_fills]))
+                    if all_fills else None
+                ),
+                "net_positive_fraction": (
+                    float(np.mean([net_after_costs(x.gross_return, fee, slip) > 0 for x in all_fills]))
+                    if all_fills else None
+                ),
+            }
+            for name, fee, slip in stress
+        ]
+        report["execution_audit"]["approved_as_trading_signal"] = False
     out=Path(args.output);out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2))
