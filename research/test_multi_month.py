@@ -8,6 +8,23 @@ def report(start: str, mean: float = .0001, selected: int = 25) -> dict:
         "test_start": f"{start} 00:00:00+00:00",
         "test_end_exclusive": "2026-08-16 00:00:00+00:00",
         "rows": {"test": 8640},
+        "portfolio_30d": {
+            "release_approved": False,
+            "ungated_cost_sensitivity": {
+                name: {"release_approved": False, "target_net_30d_return": .07,
+                       "net_equity_return": mean, "max_realized_drawdown": 0.0,
+                       "executed_fills": selected,
+                       "net_30d_goal_met_in_development": mean >= .07}
+                for name in SCENARIOS
+            },
+            "abstention_cost_sensitivity": {
+                name: {"release_approved": False, "target_net_30d_return": .07,
+                       "net_equity_return": mean, "max_realized_drawdown": 0.0,
+                       "executed_fills": selected,
+                       "net_30d_goal_met_in_development": mean >= .07}
+                for name in SCENARIOS
+            },
+        },
         "research_abstention": {
             "release_approved": False,
             "gate_admitted": selected,
@@ -53,6 +70,22 @@ class MultiMonthReleaseSafetyTests(unittest.TestCase):
     def test_gate_refuses_invalid_count(self):
         reports = [report(x) for x in FOLDS]
         reports[1]["research_abstention"]["gate_admitted"] = 26
+        with self.assertRaises(ValueError):
+            summarize(reports)
+
+    def test_not_seven_percent_though_positive_returns(self):
+        data = summarize([report(x, mean=.001) for x in FOLDS])
+        self.assertFalse(data["net_7pct_30d_development_goal_met_all_folds"])
+        self.assertFalse(data["release_approved"])
+
+    def test_development_goal_cannot_promote_model(self):
+        data = summarize([report(x, mean=.08) for x in FOLDS])
+        self.assertTrue(data["net_7pct_30d_development_goal_met_all_folds"])
+        self.assertFalse(data["release_approved"])
+
+    def test_portfolio_not_approved_fails_closed(self):
+        reports = [report(x) for x in FOLDS]
+        reports[0]["portfolio_30d"]["release_approved"] = True
         with self.assertRaises(ValueError):
             summarize(reports)
 
