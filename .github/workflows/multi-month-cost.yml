@@ -1,0 +1,48 @@
+name: Fishnet four-month execution audit
+on:
+  pull_request:
+    paths:
+      - 'research/multi_month.py'
+      - 'research/test_multi_month.py'
+      - 'research/dev_baseline.py'
+      - 'research/execution.py'
+      - '.github/workflows/multi-month-cost.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  four-month-dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas numpy pyarrow lightgbm
+      - name: Research unit tests
+        run: python -m unittest discover -s research -p 'test_*.py' -v
+      - name: Build point-in-time historical features
+        run: |
+          python - <<'PY'
+          from research.features import build
+          build('data', ['BTCUSDT', 'ETHUSDT']).to_parquet('/tmp/fishnet-features.parquet', compression='zstd')
+          PY
+      - name: Train four independent development models and audit costs
+        run: python -m research.multi_month /tmp/fishnet-features.parquet data --output /tmp/fishnet-fourfold.json --rounds 100
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-fourfold-cost-development
+          path: |
+            /tmp/fishnet-fourfold.json
+            /tmp/fishnet-20??-??-??-dev.json
+          retention-days: 30
