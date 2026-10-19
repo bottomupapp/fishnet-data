@@ -135,3 +135,99 @@ def net_after_costs(gross_return: float, fee_bps_per_side: float, slippage_bps_p
         raise ValueError("invalid gross return or execution cost")
     fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
     return float((1 + gross_return) * (1 - slip) * (1 - fee) / ((1 + slip) * (1 + fee)) - 1)
+
+
+def net_after_costs_short(gross_return: float, fee_bps_per_side: float, slippage_bps_per_side: float) -> float:
+    """Short return using effective sell proceeds as denominator.
+
+    Gross return = (entry_price - exit_price) / entry_price. Assumes fixed
+    proportional taker fees/slippage per side, no funding or borrowing.
+    """
+    vals = (gross_return, fee_bps_per_side, slippage_bps_per_side)
+    if not all(np.isfinite(v) for v in vals) or gross_return >= 1:
+        raise ValueError("invalid short return or costs")
+    if not (0 <= fee_bps_per_side < 10000 and 0 <= slippage_bps_per_side < 10000):
+        raise ValueError("invalid short execution costs")
+    fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
+    sell = (1 - fee) * (1 - slip)
+    buy = (1 + fee) * (1 + slip)
+    return float(1 - (1 - gross_return) * buy / sell)
+
+
+def simulate_short(
+    bars: pd.DataFrame,
+    decision_at: pd.Timestamp,
+    barrier_fraction: float,
+    horizon_minutes: int,
+    *,
+    entry_delay_minutes: int = 2,
+    fee_bps_per_side: float = 6.0,
+    slippage_bps_per_side: float = 3.0,
+) -> AssumedFill:
+    """Research-only SHORT with t+2 assumed entry, stop-first 1m OHLC logic.
+
+    Gap through upper stop uses the worse open. TP capped at target. Both
+    barriers in the same candle conservatively count as stop. OHLC cannot
+    establish intrabar sequence or actual exchange liquidation/funding.
+    """
+    if not isinstance(bars.index, pd.DatetimeIndex) or bars.index.tz is None:
+        raise ValueError("UTC-aware minute index required")
+    if not bars.index.is_monotonic_increasing or not bars.index.is_unique:
+        raise ValueError("minute index must be sorted and unique")
+    if not np.isfinite(barrier_fraction) or not 0 < barrier_fraction < 1:
+        raise ValueError("invalid barrier")
+    if horizon_minutes < 1 or entry_delay_minutes < 2:
+        raise ValueError("horizon must be positive and entry delay at least two minutes")
+    if not all(np.isfinite(v) and 0 <= v < 10000 for v in (fee_bps_per_side, slippage_bps_per_side)):
+        raise ValueError("invalid execution cost")
+    if not {"open", "high", "low", "close"}.issubset(bars.columns):
+        raise ValueError("missing OHLC fields")
+    ts = pd.Timestamp(decision_at)
+    if ts.tzinfo is None:
+        raise ValueError("decision timestamp must be timezone-aware")
+    try:
+        idx = bars.index.get_loc(ts)
+    except KeyError as exc:
+        raise ValueError("decision minute absent") from exc
+    if not isinstance(idx, (int, np.integer)):
+        raise ValueError("ambiguous decision minute")
+    begin = int(idx) + entry_delay_minutes
+    end = begin + horizon_minutes
+    if end > len(bars):
+        raise ValueError("insufficient observed future bars")
+    period = bars.iloc[int(idx):end]
+    expected = pd.date_range(ts, periods=entry_delay_minutes + horizon_minutes, freq="min", tz=ts.tz)
+    if not period.index.equals(expected):
+        raise ValueError("missing minute inside simulation window")
+    if "source_observed" in period and not period["source_observed"].fillna(False).astype(bool).all():
+        raise ValueError("synthetic or missing source bar")
+    ohlc = period[["open", "high", "low", "close"]].to_numpy(dtype=np.float64)
+    if not np.isfinite(ohlc).all() or (ohlc <= 0).any():
+        raise ValueError("invalid OHLC prices")
+    if ((ohlc[:, 1] < ohlc[:, [0, 2, 3]].max(axis=1)) |
+        (ohlc[:, 2] > ohlc[:, [0, 1, 3]].min(axis=1))).any():
+        raise ValueError("inconsistent OHLC")
+
+    entry = float(bars.iloc[begin]["open"])
+    target, stop = entry * (1 - barrier_fraction), entry * (1 + barrier_fraction)
+    exit_px, reason, exit_idx = float(bars.iloc[end - 1]["close"]), "time_limit", end - 1
+    for k in range(begin, end):
+        bar = bars.iloc[k]
+        if float(bar["open"]) >= stop:
+            exit_px, reason, exit_idx = float(bar["open"]), "stop_gap", k
+            break
+        if float(bar["high"]) >= stop:
+            exit_px, reason, exit_idx = stop, "stop", k
+            break
+        if float(bar["low"]) <= target:
+            exit_px, reason, exit_idx = target, "target", k
+            break
+    gross = 1 - exit_px / entry
+    net = net_after_costs_short(gross, fee_bps_per_side, slippage_bps_per_side)
+    return AssumedFill(
+        entry_at=bars.index[begin].isoformat(),
+        exit_at=bars.index[exit_idx].isoformat(),
+        exit_reason=reason,
+        gross_return=float(gross),
+        net_return=float(net),
+    )
