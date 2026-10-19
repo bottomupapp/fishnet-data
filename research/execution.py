@@ -124,3 +124,14 @@ def load_historical_bars(root: str, symbol: str, cutoff_exclusive: pd.Timestamp)
     if df.index.has_duplicates:
         raise ValueError("duplicate minute timestamps")
     return df
+
+
+def net_after_costs(gross_return: float, fee_bps_per_side: float, slippage_bps_per_side: float) -> float:
+    """Apply symmetric fixed-cost stress to an already simulated gross return."""
+    values = (gross_return, fee_bps_per_side, slippage_bps_per_side)
+    if not all(np.isfinite(v) for v in values):
+        raise ValueError("non-finite return or execution cost")
+    if gross_return <= -1 or not (0 <= fee_bps_per_side < 10000) or not (0 <= slippage_bps_per_side < 10000):
+        raise ValueError("invalid gross return or execution cost")
+    fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
+    return float((1 + gross_return) * (1 - slip) * (1 - fee) / ((1 + slip) * (1 + fee)) - 1)
