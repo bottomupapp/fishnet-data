@@ -67,7 +67,7 @@ def evaluate_joint(
     months = []
     for start in STARTS:
         events = []
-        for target in TARGETS:  # fixed order; NOT ranked by future outcomes
+        for target in TARGETS:  # PREDECLARED priority for exact entry/symbol ties; never rank by future exit
             record = indexed[(target, start)]
             for item in record["joint_portfolio_candidates"]:
                 if item.get("target") != target or item.get("side") != target.split("_")[1]:
@@ -136,6 +136,8 @@ def evaluate_joint(
         "months": months,
         "risk_fraction_per_trade": .01,
         "shared_risk_book": True,
+        "simultaneous_same_symbol_signal_priority": TARGETS,
+        "future_exit_timestamps_used_for_admission_priority": False,
         "all_four_dev_months_net7": all(m["net_7pct_at_base_cost"] for m in months),
         "holdout_untouched": True,
         "funding_archive_reconciliation_included": funding_resolver is not None,
