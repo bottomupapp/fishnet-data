@@ -11,6 +11,7 @@ on:
       - 'research/test_multi_month.py'
       - 'research/grid_summary.py'
       - 'research/joint_portfolio.py'
+      - 'research/funding_cost.py'
       - 'research/test_joint_portfolio.py'
       - 'research/test_grid_summary.py'
       - '.github/workflows/strategy-grid.yml'
@@ -74,10 +75,12 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             research
+            data/BTCUSDT
+            data/ETHUSDT
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install pandas numpy lightgbm
+      - run: python -m pip install pandas numpy pyarrow lightgbm
       - uses: actions/download-artifact@v4
         with:
           pattern: fishnet-grid-*
@@ -86,7 +89,7 @@ jobs:
       - name: Summarize all six strategies without touching locked holdout
         run: python -m research.grid_summary reports --output reports/fishnet-six-way-summary.json
       - name: Replay all six directions and horizons through one shared risk book
-        run: python -m research.joint_portfolio reports --output reports/fishnet-joint-portfolio.json
+        run: python -m research.joint_portfolio reports --funding-root data --output reports/fishnet-joint-portfolio.json
       - uses: actions/upload-artifact@v4
         with:
           name: fishnet-six-way-development-summary
