@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'research/rr_model.py'
+      - 'research/prob_calibration.py'
+      - 'research/test_prob_calibration.py'
       - 'research/test_rr_model.py'
       - 'research/rr_labels.py'
       - '.github/workflows/net-32r-model.yml'
