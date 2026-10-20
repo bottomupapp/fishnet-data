@@ -13,6 +13,7 @@ from typing import Callable
 
 from research.execution import load_historical_bars
 from research.funding_cost import load_funding_events, reconcile_risk_fill_funding
+from research.intrabar_stress import audit_intrabar_accepted_positions
 from research.rr_labels import HOLDOUT_START
 
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
@@ -42,6 +43,7 @@ def evaluate_joint(
     reports: list[dict],
     *,
     funding_resolver: Callable[[RiskFill], RiskFill] | None = None,
+    stress_bars: dict | None = None,
 ) -> dict:
     if len(reports) != len(TARGETS) * len(STARTS):
         raise ValueError("expected 24 target-fold research reports")
@@ -85,6 +87,7 @@ def evaluate_joint(
                 events, starting_capital=10000., risk_fraction=.01,
                 max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                 fee_bps_per_side=fee, slippage_bps_per_side=slip,
+                record_executed_positions=(stress_bars is not None and name == "base"),
             )
             if cost_results[name]["release_approved"] is not False:
                 raise ValueError("research replay cannot approve live release")
@@ -94,12 +97,25 @@ def evaluate_joint(
                     max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                     fee_bps_per_side=fee, slippage_bps_per_side=slip,
                     require_funding_reconciled=True,
+                    record_executed_positions=(stress_bars is not None and name == "base"),
                 )
                 if (funding_results[name]["release_approved"] is not False or
                     (funded_events and not funding_results[name]["funding_reconciled_for_all_fills"])):
                     raise ValueError("funding adjusted research PnL must be fully reconciled")
+        stress = (
+            audit_intrabar_accepted_positions(
+                cost_results["base"]["accepted_position_trace"],stress_bars)
+            if stress_bars is not None else None
+        )
+        funded_stress = (
+            audit_intrabar_accepted_positions(
+                funding_results["base"]["accepted_position_trace"],stress_bars)
+            if stress_bars is not None and funded_events is not None else None
+        )
         months.append({
             "start": start,
+            "base_intrabar_position_stress": stress,
+            "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
             "cost_scenarios": cost_results,
             "funding_adjusted_cost_scenarios": funding_results if funded_events is not None else None,
@@ -124,6 +140,8 @@ def evaluate_joint(
         "holdout_untouched": True,
         "funding_archive_reconciliation_included": funding_resolver is not None,
         "funding_archive_not_okx_execution_data": True,
+        "intrabar_ohlc_stress_audited": stress_bars is not None,
+        "actual_exchange_liquidation_engine_simulated": False,
         "all_four_dev_months_net7_after_archived_funding": (
             all(m["net_7pct_at_base_cost_after_funding"] for m in months)
             if funding_resolver is not None else None
@@ -134,6 +152,7 @@ def evaluate_joint(
             "Orders, fills and fees remain historical assumptions; no actual broker execution.",
             "Same-symbol concurrent LONG and SHORT are deliberately excluded pending hedge-mode analysis.",
             "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
+            "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
         ],
@@ -144,6 +163,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("reports_dir")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--stress-root", default=None,
+                        help="Observed archived minute OHLC for conservative accepted-position stress")
     parser.add_argument("--funding-root", default=None,
                         help="Existing historical funding archives; opt-in post-hoc funding audit")
     args = parser.parse_args()
@@ -152,6 +173,10 @@ def main():
         [json.loads(f.read_text()) for f in files],
         funding_resolver=make_archived_funding_resolver(args.funding_root)
         if args.funding_root else None,
+        stress_bars={
+            sym:load_historical_bars(args.stress_root,sym,HOLDOUT_START)
+            for sym in ("BTCUSDT","ETHUSDT")
+        } if args.stress_root else None,
     )
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)
