@@ -122,7 +122,8 @@ def label_rr_events(
                   (prices[:, 2] <= prices[:, [0, 1, 3]].min(axis=1)))
     # Source continuity includes the decision bar and delayed-entry bars.
     good = source & consistent
-    sequential = np.r_[True, np.diff(index.asi8) == pd.Timedelta("1min").value]
+    # Timedelta comparisons are resolution-independent (pandas may store us/ns).
+    sequential = np.r_[True, (index[1:] - index[:-1]) == pd.Timedelta(minutes=1)]
     good &= sequential
     prefix = np.r_[0, np.cumsum((~good).astype(np.int64))]
     good_idx = np.flatnonzero(valid)
