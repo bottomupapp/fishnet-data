@@ -83,7 +83,11 @@ def risk_portfolio_audit(
         if require_funding_reconciled and fill.funding_reconciled is not True:
             raise ValueError("historical funding is required for every simulated fill")
         ordered.append((entry.tz_convert("UTC"), exit_.tz_convert("UTC"), fill))
-    ordered.sort(key=lambda item: (item[0], item[2].symbol, item[1]))
+    # NEVER use the historical exit timestamp, realized PnL or future hold
+    # duration to choose between simultaneous proposals. Python's sort is
+    # stable: entry time + known symbol only; same-time same-symbol ties retain
+    # the upstream PREDECLARED strategy priority / original candidate order.
+    ordered.sort(key=lambda item: (item[0], item[2].symbol))
 
     equity = float(starting_capital)
     peak = equity
