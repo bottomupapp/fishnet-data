@@ -81,6 +81,15 @@ def _validated_event_window(
     return entry, exit_
 
 
+def load_observed_stress_bars(root: str, symbol: str) -> pd.DataFrame:
+    """Direct archived Parquet rows are observed; never bless padded rows."""
+    bars = load_historical_bars(root, symbol, HOLDOUT_START)
+    if "source_observed" not in bars.columns:
+        bars = bars.copy()
+        bars["source_observed"] = True
+    return bars
+
+
 def evaluate_joint(
     reports: list[dict],
     *,
@@ -315,7 +324,7 @@ def main():
         funding_resolver=make_archived_funding_resolver(args.funding_root)
         if args.funding_root else None,
         stress_bars={
-            sym:load_historical_bars(args.stress_root,sym,HOLDOUT_START)
+            sym:load_observed_stress_bars(args.stress_root,sym)
             for sym in ("BTCUSDT","ETHUSDT")
         } if args.stress_root else None,
     )
