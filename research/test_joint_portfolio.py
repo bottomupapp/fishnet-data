@@ -174,6 +174,62 @@ class JointBookTests(unittest.TestCase):
         self.assertTrue(result["fold_entry_and_locked_holdout_windows_validated"])
         self.assertFalse(result["release_approved"])
 
+    def test_utc_folds_accept_negative_offset_on_previous_local_day(self):
+        reports=self.all_reports()
+        reports[0]["test_start"]="2026-04-16T21:00:00-03:00"
+        reports[0]["test_end_exclusive"]="2026-05-16T21:00:00-03:00"
+        reports[0]["holdout_locked_from"]="2026-08-16T21:00:00-03:00"
+        result=evaluate_joint(reports)
+        self.assertTrue(result["fold_entry_and_locked_holdout_windows_validated"])
+
+    def test_accepted_late_exit_invalidates_only_as_of_month_goal(self):
+        reports=self.all_reports()
+        # Target[0] has the fixed predeclared priority at entry.
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        self.assertEqual(april["accepted_base_positions_settling_after_fold"],1)
+        self.assertFalse(april["base_cost_30d_goal_assessable"])
+        self.assertIsNone(april["base_cost_net_return_at_fold_end"])
+        self.assertIsNone(april["net_7pct_at_base_cost"])
+        self.assertFalse(result["all_four_dev_months_30d_goal_assessable"])
+        self.assertFalse(result["all_four_dev_months_net7"])
+        self.assertIsNotNone(april["cost_scenarios"]["base"]["net_equity_return"])
+        self.assertIsNone(april["cost_scenarios"]["base"]["accepted_position_trace"])
+        self.assertFalse(result["release_approved"])
+
+    def test_late_rejected_candidate_does_not_invalidate_month(self):
+        reports=self.all_reports()
+        # TARGETS[1] enters at exactly the same minute, but TARGETS[0]
+        # already takes the sole BTC slot. Future outcome of rejected trade
+        # must not affect month completeness.
+        reports[1]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        self.assertEqual(april["candidate_exits_at_or_after_fold_end"],1)
+        self.assertEqual(april["accepted_base_positions_settling_after_fold"],0)
+        self.assertTrue(april["base_cost_30d_goal_assessable"])
+        self.assertIsNotNone(april["base_cost_net_return_at_fold_end"])
+        self.assertIsNotNone(april["net_7pct_at_base_cost"])
+
+    def test_funding_replay_independently_requires_month_end_settlement(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        funded=evaluate_joint(
+            reports,
+            funding_resolver=lambda fill: replace(
+                fill, funding_fraction=-.001, funding_reconciled=True,
+            ),
+        )
+        april=funded["months"][0]
+        self.assertEqual(april["accepted_funding_positions_settling_after_fold"],1)
+        self.assertFalse(april["funding_adjusted_30d_goal_assessable"])
+        self.assertIsNone(april["funding_adjusted_net_return_at_fold_end"])
+        self.assertIsNone(april["net_7pct_at_base_cost_after_funding"])
+        self.assertFalse(funded["all_four_dev_months_net7_after_archived_funding"])
+        self.assertIsNone(april["funding_adjusted_cost_scenarios"]["base"]["accepted_position_trace"])
+        self.assertFalse(funded["release_approved"])
+
     def test_same_utc_boundaries_allow_explicit_timezone_offset(self):
         reports=self.all_reports()
         reports[0]["test_start"]="2026-04-17T03:00:00+03:00"
