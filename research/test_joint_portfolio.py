@@ -7,6 +7,10 @@ def report(target, start):
     at = Timestamp(start, tz="UTC") + Timedelta(days=2)
     return {
         "target": target, "test_start": start + " 00:00:00+00:00",
+        "test_end_exclusive": min(
+            Timestamp(start, tz="UTC") + Timedelta(days=30),
+            Timestamp("2026-08-16T00:00:00Z"),
+        ).isoformat(),
         "holdout_locked_from": "2026-08-17 00:00:00+00:00",
         "research_abstention": {"release_approved": False, "gate_admitted": 1},
         "joint_portfolio_candidates": [{
@@ -117,6 +121,65 @@ class JointBookTests(unittest.TestCase):
         reports=self.all_reports()
         reports[0]["holdout_locked_from"]="2026-08-01"
         with self.assertRaises(ValueError): evaluate_joint(reports)
+
+    def test_forged_candidate_in_locked_holdout_fails_closed(self):
+        reports=self.all_reports()
+        proposal=reports[0]["joint_portfolio_candidates"][0]
+        proposal["entry_at"]="2026-08-17T00:00:00Z"
+        proposal["exit_at"]="2026-08-17T00:05:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_candidate_outside_own_fold_is_rejected(self):
+        from pandas import Timestamp, Timedelta
+        for entry in ("2026-04-16T23:59:00Z", "2026-05-17T00:00:00Z"):
+            reports=self.all_reports()
+            proposal=reports[0]["joint_portfolio_candidates"][0]
+            proposal["entry_at"]=entry
+            proposal["exit_at"]=(Timestamp(entry)+Timedelta(minutes=5)).isoformat()
+            with self.assertRaisesRegex(ValueError,"candidate crosses"):
+                evaluate_joint(reports)
+
+    def test_candidate_exit_in_holdout_is_rejected_even_with_valid_entry(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-08-17T00:00:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_naive_or_reversed_candidate_clock_fails_closed(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["entry_at"]="2026-04-19 00:00:00"
+        with self.assertRaisesRegex(ValueError,"timezone-aware"):
+            evaluate_joint(reports)
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-04-18T00:00:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_fold_end_metadata_must_match_frozen_development_period(self):
+        for broken in ("2026-08-17T00:00:00Z", None):
+            reports=self.all_reports()
+            if broken is None:
+                del reports[0]["test_end_exclusive"]
+            else:
+                reports[0]["test_end_exclusive"]=broken
+            with self.assertRaisesRegex(ValueError,"development fold"):
+                evaluate_joint(reports)
+
+    def test_late_preholdout_exit_is_counted_not_hidden_in_monthly_claim(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        self.assertEqual(result["months"][0]["candidate_exits_at_or_after_fold_end"],1)
+        self.assertTrue(result["fold_entry_and_locked_holdout_windows_validated"])
+        self.assertFalse(result["release_approved"])
+
+    def test_same_utc_boundaries_allow_explicit_timezone_offset(self):
+        reports=self.all_reports()
+        reports[0]["test_start"]="2026-04-17T03:00:00+03:00"
+        reports[0]["test_end_exclusive"]="2026-05-17T03:00:00+03:00"
+        result=evaluate_joint(reports)
+        self.assertTrue(result["holdout_untouched"])
 
     def test_wrong_direction_rejected(self):
         reports=self.all_reports()
