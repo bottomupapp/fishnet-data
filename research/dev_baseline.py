@@ -9,7 +9,7 @@ import pandas as pd
 import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
 from research.execution import simulate_long, simulate_short, load_historical_bars, net_after_costs, net_after_costs_short
-from research.admission import evaluate_admission, minimum_probability_for_cost_surplus
+from research.admission import evaluate_admission, minimum_probability_for_cost_surplus, minimum_barrier_to_beat_cost
 from research.portfolio import CandidateFill, portfolio_audit
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
 
@@ -99,6 +99,8 @@ def main():
                     minimum_probability_for_cost_surplus(float(group[f"barrier_{hz}"].median()))
                     if len(group) else None
                 ),
+                "minimum_barrier_fraction_required_at_perfect_proxy_accuracy": minimum_barrier_to_beat_cost(),
+                "cost_model_note": "Pretrade symmetric barrier proxy; not a fill or expected-return prediction",
                 "median_barrier_structurally_untradeable": (
                     minimum_probability_for_cost_surplus(float(group[f"barrier_{hz}"].median())) >= 1
                     if len(group) else None
