@@ -76,7 +76,7 @@ class Net32RResearchLabels(unittest.TestCase):
         self.assertTrue(np.isnan(result.label))
 
     def test_holdout_crossing_is_invalid(self):
-        dates = pd.date_range(HOLDOUT_START-pd.Timedelta(minutes=20),periods=40,freq="min")
+        dates = pd.date_range(HOLDOUT_START-pd.Timedelta(minutes=20),periods=len(self.bars),freq="min")
         bars=self.bars.copy()
         bars.index=dates
         result=label_rr_events(bars,pd.DatetimeIndex([dates[10]]),
