@@ -24,6 +24,28 @@ class JointBookTests(unittest.TestCase):
     def all_reports(self):
         return [report(t,s) for s in STARTS for t in TARGETS]
 
+    def test_direct_archive_rows_are_explicitly_observed_for_mtm(self):
+        from unittest.mock import patch
+        import pandas as pd
+        from research.joint_portfolio import load_observed_stress_bars
+        idx=pd.date_range("2026-07-01T00:00:00Z",periods=2,freq="min")
+        raw=pd.DataFrame({"open":[100.,101.],"high":[101.,102.],
+                          "low":[99.,100.],"close":[100.,101.]},index=idx)
+        with patch("research.joint_portfolio.load_historical_bars",return_value=raw):
+            marked=load_observed_stress_bars("data","BTCUSDT")
+        self.assertTrue(marked["source_observed"].all())
+        self.assertNotIn("source_observed",raw.columns)
+
+    def test_source_archive_explicit_missing_rows_never_overridden(self):
+        from unittest.mock import patch
+        import pandas as pd
+        from research.joint_portfolio import load_observed_stress_bars
+        idx=pd.date_range("2026-07-01T00:00:00Z",periods=2,freq="min")
+        raw=pd.DataFrame({"source_observed":[True,False]},index=idx)
+        with patch("research.joint_portfolio.load_historical_bars",return_value=raw):
+            marked=load_observed_stress_bars("data","BTCUSDT")
+        self.assertEqual(marked["source_observed"].tolist(),[True,False])
+
     def test_shared_book_does_not_add_six_independent_equity_returns(self):
         r = evaluate_joint(self.all_reports())
         first = r["months"][0]["cost_scenarios"]["base"]
