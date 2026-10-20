@@ -22,6 +22,7 @@ from research.execution import load_historical_bars
 from research.rr_labels import HOLDOUT_START, label_rr_events
 from research.rr_model import SYMBOLS, DEVELOPMENT_TEST_START, partition_boundaries, safe_model_columns
 from research.net_r_gate import calibrate_r_gate
+from research.regime_gate import fit_regime_gates, select_from_frozen_gates
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
 from research.run import PARAMS, dedupe
 
@@ -91,6 +92,25 @@ def run(features_file: str, root: str, *, side: str, horizon: int, reward: float
     top=dedupe(test_with_prediction[test_with_prediction.expected_r_model_score >=
                                   gate.score_threshold],horizon)
     admitted=top if gate.admitted_for_research else top.iloc[:0].copy()
+
+    # Second, strictly predeclared research arm: trend-direction × trailing
+    # relative volatility, with a low-activity exclusion. Every decision
+    # is frozen using realized R from the earlier calibration month ONLY.
+    regime_evidence=fit_regime_gates(cal,cal_p,side=side,horizon_minutes=horizon)
+    regime_admitted=select_from_frozen_gates(
+        test,test_p,regime_evidence,side=side,horizon_minutes=horizon,
+    )
+    regime_fills=[
+        RiskFill(str(row.symbol),str(row.event_entry),str(row.event_exit),
+                 float(row.event_gross_return),float(row.event_stop_fraction),side)
+        for row in regime_admitted.itertuples(index=False)
+    ]
+    regime_portfolio=risk_portfolio_audit(
+        regime_fills,starting_capital=10000.,risk_fraction=.01,
+        max_leverage=20.,max_gross_exposure=6.,max_concurrent_positions=2,
+        fee_bps_per_side=ROUND_TRIP_FEE_BPS_PER_SIDE,
+        slippage_bps_per_side=SLIPPAGE_BPS_PER_SIDE,
+    )
     fills=[
         RiskFill(str(row.symbol), str(row.event_entry), str(row.event_exit),
                  float(row.event_gross_return),float(row.event_stop_fraction),side)
@@ -117,6 +137,18 @@ def run(features_file: str, root: str, *, side: str, horizon: int, reward: float
         "test_preselected_mean_net_r":float(top.net_r.mean()) if len(top) else None,
         "admitted_candidate_count":int(len(admitted)),
         "portfolio":portfolio,
+        "regime_research": {
+            "policy": "4_predeclared_trend_direction_by_relative_volatility_low_activity_excluded",
+            "gate_fitted_only_on_pretest_calibration": True,
+            "volume_z_is_not_orderbook_liquidity": True,
+            "evidence": {name:asdict(e) for name,e in regime_evidence.items()},
+            "admitted_candidate_count":len(regime_admitted),
+            "admitted_historical_mean_net_r":(
+                float(regime_admitted.net_r.mean()) if len(regime_admitted) else None
+            ),
+            "portfolio":regime_portfolio,
+            "release_approved":False,
+        },
         "goal_7pct_net_per_development_window_achieved":
             portfolio["net_30d_goal_met_in_development"],
         "release_approved":False,
@@ -124,6 +156,8 @@ def run(features_file: str, root: str, *, side: str, horizon: int, reward: float
             "Single development month; no independent holdout validation.",
             "Prediction is not verified expected net-R or a guaranteed return.",
             "Non-overlapping calibration removes within-symbol overlaps, not cross-coin correlations.",
+            "Four regime evaluations on one calibration month create multiple testing risk.",
+            "Activity z-score is a proxy and not a measurement of order-book depth.",
             "Two-standard-error calibration haircut is heuristic, not a formal confidence interval.",
             "Assumed costs and liquidation proxy; no measured fills, funding or mark-to-market risk.",
             "Historical strategy is research-only, not real trading or executable orders.",
