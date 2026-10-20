@@ -26,7 +26,9 @@ from research.run import PARAMS, feature_cols, dedupe
 DEVELOPMENT_TEST_START = pd.Timestamp("2026-07-17T00:00:00Z")
 EMBARGO = pd.Timedelta(days=1)
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
-ECONOMIC_PROBABILITY_FLOOR = 1.0 / (1.0 + REWARD_MULTIPLE)
+ECONOMIC_PROBABILITY_FLOOR = 1.0 / (1.0 + REWARD_MULTIPLE)  # Backwards-compatible 3.2R diagnostic
+PREDECLARED_REWARDS = (1.0, 1.5, 2.0, 3.2)
+NET_30D_GOAL = .07
 
 
 def partition_boundaries(test_start: pd.Timestamp, horizon: int) -> dict[str, pd.Timestamp]:
@@ -59,9 +61,12 @@ def safe_model_columns(df: pd.DataFrame) -> list[str]:
     return columns
 
 
-def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=100) -> dict:
-    if side not in ("long", "short") or horizon not in (60,240) or rounds < 1:
-        raise ValueError("invalid 3.2R development configuration")
+def run(features_file: str, root: str, *, side: str, horizon: int,
+        reward_multiple: float=REWARD_MULTIPLE, rounds: int=100) -> dict:
+    if (side not in ("long", "short") or horizon not in (60,240)
+        or reward_multiple not in PREDECLARED_REWARDS or rounds < 1):
+        raise ValueError("invalid prespecified net R development configuration")
+    economic_probability_floor = 1.0 / (1.0 + reward_multiple)
     df = pd.read_parquet(features_file)
     df["t"] = pd.to_datetime(df["t"], utc=True)
     df = df[(df.t >= pd.Timestamp("2025-10-18T00:00:00Z")) &
@@ -86,7 +91,8 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
             raise ValueError(f"bad prior volatility for {symbol}")
         outcomes = label_rr_events(
             market, pd.DatetimeIndex(rows.t), stops,
-            side=side, horizon_minutes=horizon, cutoff_exclusive=HOLDOUT_START)
+            side=side, horizon_minutes=horizon, reward_multiple=reward_multiple,
+            cutoff_exclusive=HOLDOUT_START)
         df.loc[rows.index,"rr_label"] = outcomes.label.to_numpy()
         df.loc[rows.index,"rr_net_r"] = outcomes.net_r.to_numpy()
         df.loc[rows.index,"rr_gross_return"] = outcomes.gross_return.to_numpy()
@@ -115,10 +121,11 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
     test_with_p["prediction"] = test_scores
     test_with_p["calibrated_probability"] = calibrated_test_scores
     top = dedupe(test_with_p[test_with_p.prediction >= cal_cutoff], horizon)
-    gate_threshold = max(cal_cutoff, ECONOMIC_PROBABILITY_FLOOR)
+    # Both thresholds come from prespecified economics / PRE-test calibration.
+    # Never loosen the gate to force the portfolio toward a 7% target.
     gated = dedupe(test_with_p[
         (test_with_p.prediction >= cal_cutoff) &
-        (test_with_p.calibrated_probability >= ECONOMIC_PROBABILITY_FLOOR)
+        (test_with_p.calibrated_probability >= economic_probability_floor)
     ], horizon)
 
     fills = [
@@ -133,9 +140,11 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         fee_bps_per_side=6., slippage_bps_per_side=3.,
     )
     return {
-        "experiment":"fishnet-32r-directional-ml-single-development-fold",
+        "experiment":"fishnet-flexible-net-r-directional-single-development-fold",
         "side":side, "horizon_minutes":horizon,
-        "reward_multiple_cost_net":REWARD_MULTIPLE,
+        "reward_multiple_cost_net":reward_multiple,
+        "predeclared_reward_options":PREDECLARED_REWARDS,
+        "net_30d_portfolio_goal":NET_30D_GOAL,
         "symbols":SYMBOLS,
         "test_start":w["test_start"].isoformat(),
         "test_end_exclusive":w["test_end_exclusive"].isoformat(),
@@ -146,7 +155,9 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         "test_unfiltered_hit_fraction":float(test.rr_label.mean()),
         "feature_count":len(columns),
         "calibration_top1_cutoff":cal_cutoff,
-        "economic_1R_loss_3_2R_gain_probability_floor":ECONOMIC_PROBABILITY_FLOOR,
+        "economic_1R_loss_target_gain_probability_floor":economic_probability_floor,
+        "economic_1R_loss_3_2R_gain_probability_floor":
+            ECONOMIC_PROBABILITY_FLOOR if reward_multiple == REWARD_MULTIPLE else None,
         "gate_raw_top1_cutoff":cal_cutoff,
         "gate_uses_calibration_probability":True,
         "pretest_calibration_base_rate":calibrator.base_rate,
@@ -154,7 +165,7 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         "pretest_calibration_bins":len(calibrator.probabilities),
         "pretest_max_calibrated_probability":max(calibrator.probabilities),
         "test_max_calibrated_probability":float(np.max(calibrated_test_scores)),
-        "gate_probability_threshold":ECONOMIC_PROBABILITY_FLOOR,
+        "gate_probability_threshold":economic_probability_floor,
         "calibrated_top1_candidate_count":int(len(top)),
         "calibrated_top1_historical_hit_fraction":float(top.rr_label.mean()) if len(top) else None,
         "calibrated_top1_mean_cost_net_R":float(top.rr_net_r.mean()) if len(top) else None,
@@ -165,7 +176,7 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         "release_approved":False,
         "limitations": [
             "Single development fold, not an untouched holdout or real execution.",
-            "Probability floor assumes winners +3.2R and losers -1R; timeouts and gaps differ.",
+            "Probability floor assumes winners at chosen cost-net R target and losers -1R; timeouts and gaps differ.",
             "Calibration uses only pretest empirical hit rates with shrinkage; not yet independently validated.",
             "Costs and margin are assumed; no funding, true liquidation, partial fills or impact.",
         ],
@@ -179,9 +190,11 @@ def main():
     p.add_argument("--side",required=True,choices=("long","short"))
     p.add_argument("--horizon",required=True,type=int,choices=(60,240))
     p.add_argument("--rounds",type=int,default=100)
+    p.add_argument("--reward-multiple",type=float,choices=PREDECLARED_REWARDS,default=REWARD_MULTIPLE)
     p.add_argument("--output",required=True)
     args=p.parse_args()
-    result=run(args.features,args.bars_root,side=args.side,horizon=args.horizon,rounds=args.rounds)
+    result=run(args.features,args.bars_root,side=args.side,horizon=args.horizon,
+               reward_multiple=args.reward_multiple,rounds=args.rounds)
     Path(args.output).write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2))
 
