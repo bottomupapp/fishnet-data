@@ -9,12 +9,12 @@ from research.rr_labels import HOLDOUT_START
 
 
 def make_data():
-    dates=pd.date_range("2026-06-01",periods=720,freq="5min",tz="UTC")
-    # 720 points have 60+ independent 60m outcomes after 5m stride.
+    dates=pd.date_range("2026-06-01",periods=3000,freq="5min",tz="UTC")
+    # 3000 points have >=200 independent 60m outcomes after a 5m stride.
     return pd.DataFrame({
         "t":dates,
         "symbol":["BTCUSDT"]*len(dates),
-        "net_r":np.r_[np.full(650,-.2),np.full(70,1.5)],
+        "net_r":np.r_[np.full(2500,-.2),np.full(500,1.5)],
     })
 
 
@@ -25,9 +25,8 @@ class NetRRegressionGateTests(unittest.TestCase):
         gate=calibrate_r_gate(data,scores,horizon_minutes=60,
             minimum_high_scores=20)
         self.assertLess(gate.reference_events,len(data))
-        self.assertFalse(gate.admitted_for_research) if gate.highest_decile_events<20 else self.assertTrue(
-            isinstance(gate.admitted_for_research,bool)
-        )
+        self.assertGreaterEqual(gate.highest_decile_events,20)
+        self.assertIsInstance(gate.admitted_for_research,bool)
 
     def test_negative_net_r_evidence_fails_closed(self):
         data=make_data()
