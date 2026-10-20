@@ -52,6 +52,13 @@ class IntrabarStressTests(unittest.TestCase):
         report=self.audit()
         self.assertEqual(report["positions_with_possible_liquidation"],1)
 
+    def test_microsecond_resolution_parquet_index_preserves_observed_minute(self):
+        micro=self.bars.copy()
+        micro.index=micro.index.as_unit("us")
+        result=self.audit(bars=micro)
+        self.assertEqual(result["accepted_position_count"],1)
+        self.assertEqual(result["positions_with_possible_liquidation"],0)
+
     def test_missing_or_synthetic_minute_fails_closed(self):
         with self.assertRaisesRegex(ValueError,"missing observed minute"):
             self.audit(bars=self.bars.drop(index=self.index[3]))
