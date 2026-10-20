@@ -10,7 +10,8 @@ coverage fail closed. August-17-2026+ locked holdout is never read.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from research.risk_portfolio import RiskFill
 from pathlib import Path
 import math
 
@@ -136,3 +137,19 @@ def historical_funding_adjustment(
         payments_fraction=float(paid),
         receipts_fraction=float(received),
     )
+
+
+def reconcile_risk_fill_funding(fill: RiskFill, events: pd.DataFrame,
+                                bars: pd.DataFrame) -> RiskFill:
+    """Return an immutable risk fill with verified historical funding proxy.
+
+    Only for AFTER-the-fact research evaluation. Realized future rates are
+    never a feature for an entry-time prediction.
+    """
+    if fill.funding_reconciled:
+        raise ValueError("funding was already reconciled; refuse double charging")
+    adjustment=historical_funding_adjustment(
+        events,bars,side=fill.side,entry_at=fill.entry_at,exit_at=fill.exit_at)
+    return replace(fill,
+        funding_fraction=adjustment.net_funding_fraction_of_entry_notional,
+        funding_reconciled=True)
