@@ -46,6 +46,25 @@ class IntrabarStressTests(unittest.TestCase):
         self.assertAlmostEqual(report["worst_single_position_equity_excursion"],.05)
         self.assertFalse(report["actual_exchange_liquidation_modeled"])
 
+    def test_hypothetical_leverage_grid_keeps_accepted_risk_book_unchanged(self):
+        self.bars.loc[self.index[2],"low"]=90.
+        result=self.audit()
+        scenarios=result["fixed_notional_leverage_scenario_summary"]
+        self.assertEqual([x["hypothetical_leverage"] for x in scenarios],
+                         [1.,2.,3.,5.,10.,15.,20.])
+        self.assertEqual(scenarios[0]["positions_with_possible_proxy_liquidation"],0)
+        self.assertEqual(scenarios[-1]["positions_with_possible_proxy_liquidation"],1)
+        self.assertEqual(result["accepted_position_count"],1)
+        self.assertEqual(result["positions_with_possible_liquidation"],1)
+        self.assertFalse(result["release_approved"])
+
+    def test_no_positions_have_zero_hypothetical_liquidations(self):
+        result=self.audit(rows=[])
+        self.assertTrue(all(
+            s["positions_with_possible_proxy_liquidation"] == 0
+            for s in result["fixed_notional_leverage_scenario_summary"]
+        ))
+
     def test_short_uses_adverse_high(self):
         self.pos["side"]="short"
         self.bars.loc[self.index[2],"high"]=110.

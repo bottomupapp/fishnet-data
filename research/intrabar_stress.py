@@ -16,6 +16,7 @@ from research.rr_labels import HOLDOUT_START
 
 MAINTENANCE_MARGIN_PROXY = .005
 LIQUIDATION_BUFFER_PROXY = .005
+LEVERAGE_SCENARIOS = (1., 2., 3., 5., 10., 15., 20.)
 
 
 def audit_intrabar_accepted_positions(
@@ -81,6 +82,22 @@ def audit_intrabar_accepted_positions(
         # Historical exchange price path and actual mark-price/liquidation
         # tiers unavailable. A rough isolated-margin distance proxy only.
         liquidation_distance=max(0.,1/leverage-maintenance_margin_fraction-safety_buffer_fraction)
+        leverage_sensitivity = []
+        for hypothetical_leverage in LEVERAGE_SCENARIOS:
+            # Exposure stays fixed at the actually accepted notional.
+            # Hypothetical leverage changes only this isolated-margin proxy,
+            # not risk sizing, realized fills, gross PnL or historical admission.
+            proxy_distance = max(
+                0., 1. / hypothetical_leverage
+                - maintenance_margin_fraction - safety_buffer_fraction
+            )
+            leverage_sensitivity.append({
+                "hypothetical_leverage": hypothetical_leverage,
+                "proxy_liquidation_distance_fraction": float(proxy_distance),
+                "possible_liquidation_at_observed_adverse_extreme": bool(
+                    adverse >= proxy_distance
+                ),
+            })
         results.append({
             "symbol":symbol,"side":side,
             "entry_at":entry.isoformat(),"exit_at":exit_.isoformat(),
@@ -92,6 +109,7 @@ def audit_intrabar_accepted_positions(
             "possible_liquidation_before_reported_exit":
                 bool(adverse>=liquidation_distance),
             "stop_was_touched_or_exceeded_intrabar":bool(adverse>=stop),
+            "fixed_notional_leverage_sensitivity": leverage_sensitivity,
         })
     return {
         "accepted_position_count":len(results),
@@ -103,12 +121,25 @@ def audit_intrabar_accepted_positions(
         "worst_adverse_stop_multiple":(
             max(x["adverse_multiple_of_planned_stop"] for x in results)
             if results else 0.0),
+        "leverage_scenarios":LEVERAGE_SCENARIOS,
+        "fixed_notional_leverage_scenario_summary":[
+            {
+                "hypothetical_leverage": lev,
+                "positions_with_possible_proxy_liquidation": sum(
+                    row["fixed_notional_leverage_sensitivity"][i][
+                        "possible_liquidation_at_observed_adverse_extreme"
+                    ] for row in results
+                ),
+            }
+            for i,lev in enumerate(LEVERAGE_SCENARIOS)
+        ],
         "per_position":results,
         "portfolio_intraday_mtm_drawdown_computed":False,
         "actual_exchange_liquidation_modeled":False,
         "limitations":[
             "OHLC worst high/low within exit candle could occur after reported fill.",
             "Proxy uses traded OHLC, not exchange mark prices or true liquidation tiers.",
+            "Hypothetical 1-20x leverage changes only isolated-margin distance at fixed notional: not portfolio leverage selection, cross-margin balance or realized PnL.",
             "Only selected executed positions audited, not a full minute-by-minute portfolio MTM curve.",
             "Funding/liquidation fees, maintenance-tier changes, queue fills and margin call dynamics unmodeled.",
         ],
