@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from research.joint_portfolio import TARGETS, STARTS, evaluate_joint
 
 def report(target, start):
@@ -25,6 +26,31 @@ class JointBookTests(unittest.TestCase):
         self.assertEqual(first["executed_fills"], 1)
         self.assertEqual(first["skipped_fills"]["symbol_overlap"], 5)
         self.assertFalse(r["release_approved"])
+
+    def test_shared_funding_book_changes_realized_equity_not_signal_selection(self):
+        base=evaluate_joint(self.all_reports())
+        funded=evaluate_joint(
+            self.all_reports(),
+            funding_resolver=lambda event: replace(
+                event, funding_fraction=-.001, funding_reconciled=True,
+            ),
+        )
+        self.assertIsNone(base["months"][0]["funding_adjusted_cost_scenarios"])
+        self.assertTrue(funded["funding_archive_reconciliation_included"])
+        for old, new in zip(base["months"],funded["months"]):
+            before=old["cost_scenarios"]["base"]
+            after=new["funding_adjusted_cost_scenarios"]["base"]
+            self.assertEqual(before["executed_fills"],after["executed_fills"])
+            self.assertLess(after["net_equity_return"],before["net_equity_return"])
+            self.assertLess(after["realized_funding_pnl_cash"],0)
+            self.assertFalse(after["exchange_liquidation_engine_simulated"])
+            self.assertFalse(after["release_approved"])
+            self.assertLess(new["net_return_delta_from_archived_funding"],0)
+        self.assertFalse(funded["release_approved"])
+
+    def test_unreconciled_funding_replay_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "funding"):
+            evaluate_joint(self.all_reports(), funding_resolver=lambda fill: fill)
 
     def test_missing_reports_rejected(self):
         with self.assertRaises(ValueError): evaluate_joint(self.all_reports()[:-1])

@@ -58,6 +58,16 @@ class FundingAndRiskTests(unittest.TestCase):
         self.bars.loc[pd.Timestamp("2026-07-20T08:00:00Z"),"open"]=110.
         self.assertAlmostEqual(self.cash("long").net_funding_fraction_of_entry_notional,-.0011)
 
+    def test_millisecond_settlement_uses_same_observed_minute_only(self):
+        exact=pd.Timestamp("2026-07-20T08:00:00Z")
+        fractional=exact+pd.Timedelta(milliseconds=4)
+        self.events=self.events.rename(index={exact:fractional}).sort_index()
+        self.assertAlmostEqual(self.cash("long").net_funding_fraction_of_entry_notional,-.001)
+        missing=self.bars.drop(index=exact)
+        with self.assertRaisesRegex(ValueError, "funding settlement minute"):
+            historical_funding_adjustment(
+                self.events,missing,side="long",entry_at=self.enter,exit_at=self.exit)
+
     def test_unobserved_or_missing_settlement_bar_fails_closed(self):
         t=pd.Timestamp("2026-07-20T08:00:00Z")
         self.bars.loc[t,"source_observed"]=False

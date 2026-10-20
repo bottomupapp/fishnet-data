@@ -117,11 +117,15 @@ def historical_funding_adjustment(
     received=0.0
     mask=(events.index>entry)&(events.index<=exit_)
     for ts,rate in events.loc[mask,"funding_rate"].items():
+        # Archived settlement timestamps may carry a few milliseconds past
+        # the minute boundary (e.g., 08:00:00.004). Use the exact minute's
+        # observed source OHLC opening price, never nearest/future bar.
+        bar_minute=ts.floor("min")
         try:
-            price=float(bars.loc[ts,"open"])
+            price=float(bars.loc[bar_minute,"open"])
         except KeyError as exc:
             raise ValueError("funding settlement minute lacks observed price") from exc
-        if ("source_observed" in bars and not bool(bars.loc[ts,"source_observed"])) or (
+        if ("source_observed" in bars and not bool(bars.loc[bar_minute,"source_observed"])) or (
             not math.isfinite(price) or price<=0
         ):
             raise ValueError("funding settlement uses invalid or synthetic bar")
