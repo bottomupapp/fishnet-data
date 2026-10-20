@@ -91,7 +91,13 @@ def evaluate_joint(
     indexed = {}
     for r in reports:
         target = r.get("target")
-        date = str(r.get("test_start", ""))[:10]
+        try:
+            fold_clock = pd.Timestamp(r["test_start"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("missing or invalid development start") from None
+        if fold_clock.tzinfo is None:
+            raise ValueError("development start must be timezone-aware")
+        date = fold_clock.tz_convert("UTC").strftime("%Y-%m-%d")
         if target not in TARGETS or date not in STARTS or (target, date) in indexed:
             raise ValueError("unknown, repeated, or out-of-window target-fold")
         _validated_fold_window(r, date)
@@ -131,7 +137,7 @@ def evaluate_joint(
                 events, starting_capital=10000., risk_fraction=.01,
                 max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                 fee_bps_per_side=fee, slippage_bps_per_side=slip,
-                record_executed_positions=(stress_bars is not None and name == "base"),
+                record_executed_positions=(name == "base"),
             )
             if cost_results[name]["release_approved"] is not False:
                 raise ValueError("research replay cannot approve live release")
@@ -141,11 +147,28 @@ def evaluate_joint(
                     max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                     fee_bps_per_side=fee, slippage_bps_per_side=slip,
                     require_funding_reconciled=True,
-                    record_executed_positions=(stress_bars is not None and name == "base"),
+                    record_executed_positions=(name == "base"),
                 )
                 if (funding_results[name]["release_approved"] is not False or
                     (funded_events and not funding_results[name]["funding_reconciled_for_all_fills"])):
                     raise ValueError("funding adjusted research PnL must be fully reconciled")
+        # Count ONLY admitted positions. A proposal rejected due to overlap,
+        # capacity or margin does not make the booked 30-day PnL incomplete.
+        # Selection itself never uses historical exit times or outcomes.
+        base_trace = cost_results["base"]["accepted_position_trace"]
+        base_late_closes = sum(
+            pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
+            for p in base_trace
+        )
+        base_month_assessable = base_late_closes == 0
+        funded_late_closes = (
+            sum(pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
+                for p in funding_results["base"]["accepted_position_trace"])
+            if funded_events is not None else None
+        )
+        funded_month_assessable = (
+            funded_late_closes == 0 if funded_late_closes is not None else None
+        )
         stress = (
             audit_intrabar_accepted_positions(
                 cost_results["base"]["accepted_position_trace"],stress_bars)
@@ -156,18 +179,39 @@ def evaluate_joint(
                 funding_results["base"]["accepted_position_trace"],stress_bars)
             if stress_bars is not None and funded_events is not None else None
         )
+        # The original reports remain full ENTRY-COHORT settlement replays.
+        # Do not call a later realized PnL a return earned by the fold's end.
+        if stress_bars is None:
+            cost_results["base"]["accepted_position_trace"] = None
+            if funded_events is not None:
+                funding_results["base"]["accepted_position_trace"] = None
         months.append({
             "start": start,
             "base_intrabar_position_stress": stress,
             "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
             "candidate_exits_at_or_after_fold_end": candidate_exits_after_fold,
+            "accepted_base_positions_settling_after_fold": base_late_closes,
+            "base_cost_30d_goal_assessable": base_month_assessable,
+            "base_cost_net_return_at_fold_end": (
+                cost_results["base"]["net_equity_return"]
+                if base_month_assessable else None
+            ),
+            "accepted_funding_positions_settling_after_fold": funded_late_closes,
+            "funding_adjusted_30d_goal_assessable": funded_month_assessable,
+            "funding_adjusted_net_return_at_fold_end": (
+                funding_results["base"]["net_equity_return"]
+                if funded_month_assessable else None
+            ),
             "cost_scenarios": cost_results,
             "funding_adjusted_cost_scenarios": funding_results if funded_events is not None else None,
-            "net_7pct_at_base_cost": cost_results["base"]["net_30d_goal_met_in_development"],
+            "net_7pct_at_base_cost": (
+                cost_results["base"]["net_30d_goal_met_in_development"]
+                if base_month_assessable else None
+            ),
             "net_7pct_at_base_cost_after_funding": (
                 funding_results["base"]["net_30d_goal_met_in_development"]
-                if funded_events is not None else None
+                if funded_month_assessable else None
             ),
             "net_return_delta_from_archived_funding": (
                 funding_results["base"]["net_equity_return"] -
@@ -183,7 +227,12 @@ def evaluate_joint(
         "shared_risk_book": True,
         "simultaneous_same_symbol_signal_priority": TARGETS,
         "future_exit_timestamps_used_for_admission_priority": False,
-        "all_four_dev_months_net7": all(m["net_7pct_at_base_cost"] for m in months),
+        "all_four_dev_months_net7": all(
+            m["net_7pct_at_base_cost"] is True for m in months
+        ),
+        "all_four_dev_months_30d_goal_assessable": all(
+            m["base_cost_30d_goal_assessable"] for m in months
+        ),
         "holdout_untouched": True,
         "fold_entry_and_locked_holdout_windows_validated": True,
         "funding_archive_reconciliation_included": funding_resolver is not None,
@@ -191,7 +240,7 @@ def evaluate_joint(
         "intrabar_ohlc_stress_audited": stress_bars is not None,
         "actual_exchange_liquidation_engine_simulated": False,
         "all_four_dev_months_net7_after_archived_funding": (
-            all(m["net_7pct_at_base_cost_after_funding"] for m in months)
+            all(m["net_7pct_at_base_cost_after_funding"] is True for m in months)
             if funding_resolver is not None else None
         ),
         "release_approved": False,
@@ -202,7 +251,9 @@ def evaluate_joint(
             "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
             "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
-            "Development returns settle an entry cohort; candidate exits crossing fold end are counted, not silently described as exactly 30-day MTM.",
+            "Development returns settle an entry cohort; exits after fold end remain in cohort PnL but invalidate an as-of-fold-end 30-day goal claim.",
+            "When an accepted position is still open at fold end, no mark-to-market snapshot is available: the 30-day return and target status are unknown, not zero.",
+            "Only actually accepted post-window exits invalidate the 30-day goal; rejected candidates are diagnostic only.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
         ],
     }
