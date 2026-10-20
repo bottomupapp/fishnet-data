@@ -1,5 +1,5 @@
 import unittest
-from research.admission import evaluate_admission, minimum_probability_for_cost_surplus
+from research.admission import evaluate_admission, minimum_probability_for_cost_surplus, minimum_barrier_to_beat_cost
 
 
 class AdmissionSafetyTests(unittest.TestCase):
@@ -30,6 +30,18 @@ class AdmissionSafetyTests(unittest.TestCase):
     def test_invalid_barrier_fails_closed(self):
         for v in (0, -0.2, float("nan"), float("inf"), 1):
             self.assertEqual(evaluate_admission(.8, v).reason, "invalid_barrier")
+
+    def test_minimum_viable_price_move_is_above_twenty_bps(self):
+        required = minimum_barrier_to_beat_cost()
+        self.assertGreater(required, 0.002)
+        self.assertLess(required, 0.0024)
+        self.assertFalse(evaluate_admission(1., 0.002).admitted)
+        self.assertTrue(evaluate_admission(1., required + .00001).admitted)
+
+    def test_zero_cost_requirement_is_zero(self):
+        self.assertEqual(minimum_barrier_to_beat_cost(
+            fee_bps_per_side=0, slippage_bps_per_side=0,
+            uncertainty_buffer_bps=0), 0)
 
     def test_unreachable_cost_barrier_gives_probability_above_one(self):
         # 20bp barrier vs 18bp roundtrip friction plus 5bp uncertainty:
