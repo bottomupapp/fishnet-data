@@ -74,8 +74,8 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
     df["rr_net_r"] = np.nan
     df["rr_gross_return"] = np.nan
     df["rr_stop_fraction"] = np.nan
-    df["rr_entry_at"] = pd.NaT
-    df["rr_exit_at"] = pd.NaT
+    df["rr_entry_at"] = None
+    df["rr_exit_at"] = None
     for symbol in SYMBOLS:
         rows = df[df.symbol == symbol].sort_values("t")
         market = load_historical_bars(root, symbol, HOLDOUT_START)
@@ -90,8 +90,8 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         df.loc[rows.index,"rr_net_r"] = outcomes.net_r.to_numpy()
         df.loc[rows.index,"rr_gross_return"] = outcomes.gross_return.to_numpy()
         df.loc[rows.index,"rr_stop_fraction"] = stops
-        df.loc[rows.index,"rr_entry_at"] = outcomes.entry_at.to_numpy()
-        df.loc[rows.index,"rr_exit_at"] = outcomes.exit_at.to_numpy()
+        df.loc[rows.index,"rr_entry_at"] = [t.isoformat() if pd.notna(t) else None for t in outcomes.entry_at]
+        df.loc[rows.index,"rr_exit_at"] = [t.isoformat() if pd.notna(t) else None for t in outcomes.exit_at]
 
     w = partition_boundaries(DEVELOPMENT_TEST_START, horizon)
     train = df[(df.t < w["train_end_exclusive"]) & df.rr_label.notna()]
