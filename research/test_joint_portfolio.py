@@ -27,6 +27,35 @@ class JointBookTests(unittest.TestCase):
         self.assertEqual(first["skipped_fills"]["symbol_overlap"], 5)
         self.assertFalse(r["release_approved"])
 
+    def test_joint_priority_never_looks_at_future_duration_or_outcome(self):
+        # All six model hypotheses enter same coin/minute. The priority of
+        # TARGETS[0] (LONG 5m) is fixed BEFORE future price paths are known.
+        # SHORT alternatives exit earlier and have larger hindsight profits.
+        from research.execution import net_after_costs
+        for long_duration,short_duration in ((6,1),(1,6)):
+            reports=self.all_reports()
+            for report in reports:
+                proposal=report["joint_portfolio_candidates"][0]
+                entry=__import__("pandas").Timestamp(proposal["entry_at"])
+                is_first=report["target"] == TARGETS[0]
+                duration=long_duration if is_first else short_duration
+                proposal["exit_at"]=(entry+__import__("pandas").Timedelta(
+                    minutes=duration)).isoformat()
+                proposal["gross_return"]=-.003 if is_first else .03
+            combined=evaluate_joint(reports)
+            first=combined["months"][0]["cost_scenarios"]["base"]
+            expected_net=-net_after_costs(-.01,6,3)
+            # Per executed notional the first negative gross is unchanged.
+            expected_return=net_after_costs(-.003,6,3)
+            expected_notional=min(10000*.01/expected_net,10000*6,10000*20)
+            expected_equity_return=expected_notional*expected_return/10000
+            self.assertEqual(first["executed_fills"],1)
+            self.assertAlmostEqual(first["net_equity_return"],
+                                   expected_equity_return,places=11)
+            self.assertEqual(combined["simultaneous_same_symbol_signal_priority"],TARGETS)
+            self.assertFalse(combined["future_exit_timestamps_used_for_admission_priority"])
+            self.assertFalse(combined["release_approved"])
+
     def test_shared_funding_book_changes_realized_equity_not_signal_selection(self):
         base=evaluate_joint(self.all_reports())
         funded=evaluate_joint(
