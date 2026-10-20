@@ -1,0 +1,101 @@
+name: Fishnet net 3.2R directional model development
+on:
+  pull_request:
+    paths:
+      - 'research/rr_model.py'
+      - 'research/test_rr_model.py'
+      - 'research/rr_labels.py'
+      - '.github/workflows/net-32r-model.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas numpy lightgbm
+      - run: python -m unittest discover -s research -p 'test_*.py' -v
+
+  features:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+            data/SOLUSDT
+            data/BNBUSDT
+            data/XRPUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas pyarrow lightgbm
+      - name: Generate causal features from five major archive symbols
+        run: |
+          python - <<'PY'
+          from research.features import build
+          build('data',['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT']).to_parquet(
+              '/tmp/fishnet-rr-features.parquet',compression='zstd')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fishnet-rr-development-features
+          path: /tmp/fishnet-rr-features.parquet
+          retention-days: 7
+
+  directional-240m:
+    needs: features
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [long, short]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+            data/SOLUSDT
+            data/BNBUSDT
+            data/XRPUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas pyarrow lightgbm
+      - uses: actions/download-artifact@v4
+        with:
+          name: fishnet-rr-development-features
+          path: /tmp
+      - name: Train independent net 3.2R model using purged pre-holdout splits
+        env:
+          SIDE: ${{ matrix.side }}
+        run: |
+          python -m research.rr_model /tmp/fishnet-rr-features.parquet data \
+            --side "$SIDE" --horizon 240 --rounds 100 \
+            --output "/tmp/fishnet-net32r-$SIDE-240m-dev.json"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-net32r-${{ matrix.side }}-240m-development
+          path: /tmp/fishnet-net32r-*-240m-dev.json
+          retention-days: 30
