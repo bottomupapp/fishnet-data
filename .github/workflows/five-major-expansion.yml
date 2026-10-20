@@ -5,6 +5,8 @@ on:
       - 'research/major_expansion.py'
       - 'research/test_major_expansion.py'
       - 'research/dev_baseline.py'
+      - 'research/admission.py'
+      - 'research/test_admission.py'
       - 'research/test_admission_diagnostics.py'
       - '.github/workflows/five-major-expansion.yml'
   workflow_dispatch:
