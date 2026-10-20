@@ -132,6 +132,7 @@ def label_rr_events(
 
     outcomes = np.full(len(stops), np.nan, dtype=float)
     realized_r = np.full(len(stops), np.nan, dtype=float)
+    gross_returns = np.full(len(stops), np.nan, dtype=float)
     reasons = np.full(len(stops), "invalid", dtype=object)
     entry_at = np.full(len(stops), pd.NaT, dtype=object)
     exit_at = np.full(len(stops), pd.NaT, dtype=object)
@@ -179,6 +180,7 @@ def label_rr_events(
                         for x in gross], dtype=float)
         outcomes[chosen] = (exit_reasons == "target").astype(float)
         realized_r[chosen] = net / stop_losses[chosen]
+        gross_returns[chosen] = gross
         reasons[chosen] = exit_reasons
         for local, event_index in enumerate(chosen):
             entry_at[event_index] = index[first[event_index]]
@@ -187,6 +189,7 @@ def label_rr_events(
     return pd.DataFrame({
         "label": outcomes,
         "net_r": realized_r,
+        "gross_return": gross_returns,
         "reason": reasons,
         "entry_at": pd.to_datetime(entry_at, utc=True),
         "exit_at": pd.to_datetime(exit_at, utc=True),
