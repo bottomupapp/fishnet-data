@@ -3,7 +3,7 @@
 Leverage affects margin and exposure, NOT the chosen per-trade stop budget.
 This is NOT exchange liquidation/margin modelling and never places orders.
 It runs on historical simulated gross fills; trading fees/slippage are charged
-once on the notional. Stops can gap, so 1% PLANNED risk is not a loss guarantee.
+once on the notional. Historical funding is OPT-IN and never assumed present. Stops can gap, so 1% PLANNED risk is not a loss guarantee.
 """
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ class RiskFill:
     gross_return: float
     stop_fraction: float
     side: str = 'long'
+    funding_fraction: float = 0.0
+    funding_reconciled: bool = False
 
 
 def risk_portfolio_audit(
@@ -38,11 +40,15 @@ def risk_portfolio_audit(
     slippage_bps_per_side: float = 3.0,
     maintenance_margin_fraction: float = .005,
     liquidation_safety_buffer_fraction: float = .005,
+    require_funding_reconciled: bool = False,
 ) -> dict:
     """Risk-budget sizing with hard caps on margin, gross exposure and overlap.
 
     The planned stop loss includes roundtrip trading costs, so a complete
     stop (with no adverse gap) targets at most risk_fraction of equity.
+
+    When require_funding_reconciled=True, each event must have archived
+    settlement cashflows attached. Funding losses may exceed planned stop risk.
 
     Effective leverage is capped by a simplistic liquidation-distance proxy;
     this proxy cannot certify actual Binance/OKX liquidation safety.
@@ -68,16 +74,22 @@ def risk_portfolio_audit(
             or not isinstance(fill.symbol, str) or not fill.symbol.strip()
             or not math.isfinite(fill.gross_return) or fill.gross_return <= -1
             or not math.isfinite(fill.stop_fraction) or
-            not 0 < fill.stop_fraction < 1 or fill.side not in ('long', 'short')):
-            raise ValueError("invalid fill / stop input")
+            not 0 < fill.stop_fraction < 1 or fill.side not in ('long', 'short')
+            or not math.isfinite(fill.funding_fraction)):
+            raise ValueError("invalid fill / stop / funding input")
+        if fill.funding_fraction != 0 and fill.funding_reconciled is not True:
+            raise ValueError("nonzero funding must be archive-reconciled")
+        if require_funding_reconciled and fill.funding_reconciled is not True:
+            raise ValueError("historical funding is required for every simulated fill")
         ordered.append((entry.tz_convert("UTC"), exit_.tz_convert("UTC"), fill))
     ordered.sort(key=lambda item: (item[0], item[2].symbol, item[1]))
 
     equity = float(starting_capital)
     peak = equity
     max_realized_drawdown = 0.0
-    # release_at, symbol, notional, posted_margin, risk_at_planned_stop, net_return
-    positions: list[tuple[pd.Timestamp, str, float, float, float, float]] = []
+    # release_at, symbol, notional, posted_margin, planned_risk, fee_net_return, funding_fraction
+    positions: list[tuple[pd.Timestamp, str, float, float, float, float, float]] = []
+    total_realized_funding_cash = 0.0
     skipped = {"symbol_overlap": 0, "capacity": 0, "insufficient_margin": 0,
                "liquidation_distance": 0, "equity_depleted": 0}
     accepted = 0
@@ -88,12 +100,13 @@ def risk_portfolio_audit(
     ruination = False
 
     def settle(until: pd.Timestamp | None) -> None:
-        nonlocal equity, peak, max_realized_drawdown, ruination
+        nonlocal equity, peak, max_realized_drawdown, ruination, total_realized_funding_cash
         due = sorted((p for p in positions if until is None or p[0] <= until),
                      key=lambda p: (p[0], p[1]))
         for p in due:
             positions.remove(p)
-            realized_pnl = p[2] * p[5]
+            total_realized_funding_cash += p[2] * p[6]
+            realized_pnl = p[2] * (p[5] + p[6])
             equity += realized_pnl
             traded_r.append(realized_pnl / p[4])
             peak = max(peak, equity)
@@ -149,7 +162,7 @@ def risk_portfolio_audit(
         posted_margin = notional / effective_leverage
         positions.append((
             exit_ + pd.Timedelta(minutes=1), fill.symbol, notional,
-            posted_margin, planned_loss, net_return,
+            posted_margin, planned_loss, net_return, fill.funding_fraction,
         ))
         accepted += 1
         observed_max_leverage = max(observed_max_leverage, effective_leverage)
@@ -184,11 +197,17 @@ def risk_portfolio_audit(
         ),
         "max_realized_only_drawdown": max_realized_drawdown,
         "equity_depleted": ruination,
+        "funding_reconciled_for_all_fills": bool(fills) and all(f.funding_reconciled for f in fills),
+        "funding_reconciliation_required": bool(require_funding_reconciled),
+        "realized_funding_pnl_cash": float(total_realized_funding_cash),
+        "exchange_liquidation_engine_simulated": False,
         "release_approved": False,
         "limitations": [
             "One percent means estimated PLANNED risk to stop including fees, not a maximum loss.",
-            "Gaps, liquidation, funding, liquidation fees and bankruptcy can exceed planned risk.",
+            "Gaps, funding, liquidation fees and bankruptcy can exceed planned risk.",
+            "Archived funding is included ONLY when require_funding_reconciled is true; 1m opens approximate mark prices.",
             "Exchange-specific isolated/cross maintenance margin and fee tiers are not modelled.",
+            "Realized-only drawdown can understate interim losses and liquidation risk.",
             "Equity/drawdown are settled-only, not intrabar marked-to-market; exposure under stress is understated.",
             "No market impact, partial fills or live order placement. Historical 30-day development windows only.",
         ],

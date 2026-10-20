@@ -1,0 +1,62 @@
+name: Fishnet historical funding risk audit
+on:
+  pull_request:
+    paths:
+      - 'research/funding_cost.py'
+      - 'research/funding_audit.py'
+      - 'research/test_funding_cost.py'
+      - 'research/risk_portfolio.py'
+      - '.github/workflows/funding-risk-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  funding-safety-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas lightgbm
+      - name: Compile and run all research safety tests
+        run: |
+          python -m compileall -q research
+          python -m unittest discover -s research -p 'test_*.py' -v
+
+  five-major-real-funding:
+    needs: funding-safety-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+            data/SOLUSDT
+            data/BNBUSDT
+            data/XRPUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas pyarrow lightgbm
+      - name: Verify archived funding coverage and signed settlement cashflows
+        run: |
+          python -m research.funding_audit data \
+            --output /tmp/fishnet-five-major-funding-audit.json
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-five-major-real-funding-development-audit
+          path: /tmp/fishnet-five-major-funding-audit.json
+          retention-days: 30
