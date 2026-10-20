@@ -5,6 +5,8 @@ on:
       - 'research/execution.py'
       - 'research/test_short_execution.py'
       - 'research/risk_portfolio.py'
+      - 'research/intrabar_stress.py'
+      - 'research/test_intrabar_stress.py'
       - 'research/test_risk_portfolio.py'
       - 'research/dev_baseline.py'
       - 'research/multi_month.py'
@@ -89,7 +91,7 @@ jobs:
       - name: Summarize all six strategies without touching locked holdout
         run: python -m research.grid_summary reports --output reports/fishnet-six-way-summary.json
       - name: Replay all six directions and horizons through one shared risk book
-        run: python -m research.joint_portfolio reports --funding-root data --output reports/fishnet-joint-portfolio.json
+        run: python -m research.joint_portfolio reports --funding-root data --stress-root data --output reports/fishnet-joint-portfolio.json
       - uses: actions/upload-artifact@v4
         with:
           name: fishnet-six-way-development-summary
