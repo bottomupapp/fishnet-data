@@ -1,0 +1,66 @@
+name: Fishnet net 3.2R five-major label audit
+on:
+  pull_request:
+    paths:
+      - 'research/rr_labels.py'
+      - 'research/test_rr_labels.py'
+      - 'research/rr_pilot.py'
+      - '.github/workflows/net-32r-labels.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas numpy lightgbm
+      - run: python -m compileall -q research
+      - run: python -m unittest discover -s research -p 'test_*.py' -v
+
+  five-major-label-audit:
+    needs: research-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research
+            data/BTCUSDT
+            data/ETHUSDT
+            data/SOLUSDT
+            data/BNBUSDT
+            data/XRPUSDT
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy pandas pyarrow lightgbm
+      - name: Compute strictly point-in-time five-major feature data
+        run: |
+          python - <<'PY'
+          from research.features import build
+          build('data', ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT']).to_parquet(
+              '/tmp/fishnet-five-major-features.parquet', compression='zstd')
+          PY
+      - name: Audit 3.2R cost-net LONG/SHORT outcomes on four development windows
+        run: |
+          python -m research.rr_pilot data /tmp/fishnet-five-major-features.parquet \
+            --output /tmp/fishnet-32r-five-major-label-audit.json
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: fishnet-net-32r-five-major-development-label-audit
+          path: /tmp/fishnet-32r-five-major-label-audit.json
+          retention-days: 30
