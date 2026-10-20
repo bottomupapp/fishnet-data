@@ -46,6 +46,27 @@ class JointBookTests(unittest.TestCase):
             marked=load_observed_stress_bars("data","BTCUSDT")
         self.assertEqual(marked["source_observed"].tolist(),[True,False])
 
+    def test_single_accepted_fill_cannot_claim_robust_monthly_evidence(self):
+        r=evaluate_joint(self.all_reports())
+        self.assertEqual(r["minimum_accepted_fills_per_development_fold"],20)
+        self.assertFalse(r["all_four_dev_months_have_sufficient_accepted_fills"])
+        self.assertFalse(r["all_four_dev_months_net7_with_minimum_sample"])
+        for m in r["months"]:
+            self.assertEqual(m["base_accepted_fills"],1)
+            self.assertFalse(m["base_has_sufficient_accepted_fill_count"])
+        self.assertFalse(r["release_approved"])
+
+    def test_predeclared_sample_floor_does_not_change_trade_admission(self):
+        reports=self.all_reports()
+        first=evaluate_joint(reports)
+        second=evaluate_joint(reports)
+        self.assertEqual(
+            [m["cost_scenarios"]["base"]["executed_fills"] for m in first["months"]],
+            [m["cost_scenarios"]["base"]["executed_fills"] for m in second["months"]],
+        )
+        self.assertTrue(first["holdout_untouched"])
+        self.assertFalse(first["release_approved"])
+
     def test_shared_book_does_not_add_six_independent_equity_returns(self):
         r = evaluate_joint(self.all_reports())
         first = r["months"][0]["cost_scenarios"]["base"]
