@@ -55,7 +55,9 @@ def portfolio_audit(
             or not math.isfinite(fill.net_return) or fill.net_return <= -1):
             raise ValueError("invalid or timezone-naive fill")
         ordered.append((start.tz_convert("UTC"), end.tz_convert("UTC"), fill))
-    ordered.sort(key=lambda r: (r[0], r[1], r[2].symbol))
+    # Do not tie-break identical entry times using future exit timestamps.
+    # Stable ordering preserves the caller's declared signal precedence.
+    ordered.sort(key=lambda r: (r[0], r[2].symbol))
 
     equity = float(starting_capital)
     peak = equity
