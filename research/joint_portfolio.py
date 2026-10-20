@@ -137,7 +137,7 @@ def evaluate_joint(
                 events, starting_capital=10000., risk_fraction=.01,
                 max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                 fee_bps_per_side=fee, slippage_bps_per_side=slip,
-                record_executed_positions=(name == "base"),
+                record_executed_positions=True,
             )
             if cost_results[name]["release_approved"] is not False:
                 raise ValueError("research replay cannot approve live release")
@@ -147,28 +147,11 @@ def evaluate_joint(
                     max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                     fee_bps_per_side=fee, slippage_bps_per_side=slip,
                     require_funding_reconciled=True,
-                    record_executed_positions=(name == "base"),
+                    record_executed_positions=True,
                 )
                 if (funding_results[name]["release_approved"] is not False or
                     (funded_events and not funding_results[name]["funding_reconciled_for_all_fills"])):
                     raise ValueError("funding adjusted research PnL must be fully reconciled")
-        # Count ONLY admitted positions. A proposal rejected due to overlap,
-        # capacity or margin does not make the booked 30-day PnL incomplete.
-        # Selection itself never uses historical exit times or outcomes.
-        base_trace = cost_results["base"]["accepted_position_trace"]
-        base_late_closes = sum(
-            pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
-            for p in base_trace
-        )
-        base_month_assessable = base_late_closes == 0
-        funded_late_closes = (
-            sum(pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
-                for p in funding_results["base"]["accepted_position_trace"])
-            if funded_events is not None else None
-        )
-        funded_month_assessable = (
-            funded_late_closes == 0 if funded_late_closes is not None else None
-        )
         stress = (
             audit_intrabar_accepted_positions(
                 cost_results["base"]["accepted_position_trace"],stress_bars)
@@ -179,12 +162,45 @@ def evaluate_joint(
                 funding_results["base"]["accepted_position_trace"],stress_bars)
             if stress_bars is not None and funded_events is not None else None
         )
-        # The original reports remain full ENTRY-COHORT settlement replays.
-        # Do not call a later realized PnL a return earned by the fold's end.
-        if stress_bars is None:
-            cost_results["base"]["accepted_position_trace"] = None
-            if funded_events is not None:
-                funding_results["base"]["accepted_position_trace"] = None
+        # Each scenario can admit different positions as fees change;
+        # completeness must therefore be audited independently per ledger.
+        # Recorded exits are used only to annotate POST-replay reporting.
+        for ledger in (cost_results, funding_results):
+            for name, outcome in ledger.items():
+                trace = outcome["accepted_position_trace"]
+                late_count = sum(
+                    pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
+                    for p in trace
+                )
+                complete = late_count == 0
+                outcome["accepted_positions_settling_after_fold_end"] = late_count
+                outcome["net_30d_goal_assessable"] = complete
+                outcome["full_entry_cohort_goal_met_after_final_settlement"] = (
+                    outcome["net_30d_goal_met_in_development"]
+                )
+                outcome["net_30d_return_at_fold_end"] = (
+                    outcome["net_equity_return"] if complete else None
+                )
+                outcome["net_30d_goal_met_in_development"] = (
+                    outcome["net_30d_goal_met_in_development"] if complete else None
+                )
+                # Preserve existing API: only stress-enabled base replay
+                # includes the potentially large executed-position trace.
+                if stress_bars is None or name != "base":
+                    outcome["accepted_position_trace"] = None
+
+        base = cost_results["base"]
+        base_late_closes = base["accepted_positions_settling_after_fold_end"]
+        base_month_assessable = base["net_30d_goal_assessable"]
+        funded_base = funding_results.get("base")
+        funded_late_closes = (
+            funded_base["accepted_positions_settling_after_fold_end"]
+            if funded_base is not None else None
+        )
+        funded_month_assessable = (
+            funded_base["net_30d_goal_assessable"]
+            if funded_base is not None else None
+        )
         months.append({
             "start": start,
             "base_intrabar_position_stress": stress,
@@ -251,7 +267,8 @@ def evaluate_joint(
             "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
             "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
-            "Development returns settle an entry cohort; exits after fold end remain in cohort PnL but invalidate an as-of-fold-end 30-day goal claim.",
+            "Every cost scenario retains full entry-cohort realized PnL but marks its as-of-fold-end 30-day return/goal indeterminate if an accepted trade closes later.",
+            "Position exits are used to annotate reporting only after the predeclared entry-priority and capacity decisions.",
             "When an accepted position is still open at fold end, no mark-to-market snapshot is available: the 30-day return and target status are unknown, not zero.",
             "Only actually accepted post-window exits invalidate the 30-day goal; rejected candidates are diagnostic only.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
