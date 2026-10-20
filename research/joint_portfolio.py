@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Callable
 
+import pandas as pd
+
 from research.execution import load_historical_bars
 from research.funding_cost import load_funding_events, reconcile_risk_fill_funding
 from research.intrabar_stress import audit_intrabar_accepted_positions
@@ -39,6 +41,45 @@ def make_archived_funding_resolver(root: str) -> Callable[[RiskFill], RiskFill]:
     return resolve
 
 
+def _validated_fold_window(report: dict, date: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Trust timestamps, not a report's self-declared holdout-safe flag."""
+    expected_start = pd.Timestamp(date, tz="UTC")
+    expected_end = min(
+        expected_start + pd.Timedelta(days=30),
+        HOLDOUT_START - pd.Timedelta(days=1),  # frozen pre-holdout embargo
+    )
+    try:
+        actual_start = pd.Timestamp(report["test_start"])
+        actual_end = pd.Timestamp(report["test_end_exclusive"])
+        actual_lock = pd.Timestamp(report["holdout_locked_from"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("missing or invalid development fold boundaries") from None
+    if (any(t.tzinfo is None for t in (actual_start, actual_end, actual_lock))
+        or actual_start.tz_convert("UTC") != expected_start
+        or actual_end.tz_convert("UTC") != expected_end
+        or actual_lock.tz_convert("UTC") != HOLDOUT_START):
+        raise ValueError("development fold window or locked holdout differs from predeclared UTC boundaries")
+    return expected_start, expected_end
+
+
+def _validated_event_window(
+    item: dict, fold_start: pd.Timestamp, fold_end: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """A candidate must enter its declared development fold and exit pre-holdout."""
+    try:
+        entry = pd.Timestamp(item["entry_at"])
+        exit_ = pd.Timestamp(item["exit_at"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("missing or invalid historical candidate timestamps") from None
+    if entry.tzinfo is None or exit_.tzinfo is None:
+        raise ValueError("historical candidates require timezone-aware timestamps")
+    entry, exit_ = entry.tz_convert("UTC"), exit_.tz_convert("UTC")
+    if (entry < fold_start or entry >= fold_end or exit_ < entry
+        or exit_ >= HOLDOUT_START):
+        raise ValueError("candidate crosses development entry window or locked holdout")
+    return entry, exit_
+
+
 def evaluate_joint(
     reports: list[dict],
     *,
@@ -50,11 +91,16 @@ def evaluate_joint(
     indexed = {}
     for r in reports:
         target = r.get("target")
-        date = str(r.get("test_start", ""))[:10]
+        try:
+            fold_clock = pd.Timestamp(r["test_start"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("missing or invalid development start") from None
+        if fold_clock.tzinfo is None:
+            raise ValueError("development start must be timezone-aware")
+        date = fold_clock.tz_convert("UTC").strftime("%Y-%m-%d")
         if target not in TARGETS or date not in STARTS or (target, date) in indexed:
             raise ValueError("unknown, repeated, or out-of-window target-fold")
-        if str(r.get("holdout_locked_from", ""))[:10] != "2026-08-17":
-            raise ValueError("locked holdout changed")
+        _validated_fold_window(r, date)
         if r.get("research_abstention", {}).get("release_approved") is not False:
             raise ValueError("research gate must remain non-deployable")
         events = r.get("joint_portfolio_candidates")
@@ -67,6 +113,8 @@ def evaluate_joint(
     months = []
     for start in STARTS:
         events = []
+        fold_start, fold_end = _validated_fold_window(indexed[(TARGETS[0], start)], start)
+        candidate_exits_after_fold = 0
         for target in TARGETS:  # PREDECLARED priority for exact entry/symbol ties; never rank by future exit
             record = indexed[(target, start)]
             for item in record["joint_portfolio_candidates"]:
@@ -74,6 +122,8 @@ def evaluate_joint(
                     raise ValueError("event target/direction mismatch")
                 if item.get("symbol") not in ("BTCUSDT", "ETHUSDT"):
                     raise ValueError("new symbol needs separate training/audit")
+                _, exit_time = _validated_event_window(item, fold_start, fold_end)
+                candidate_exits_after_fold += int(exit_time >= fold_end)
                 events.append(RiskFill(
                     symbol=item["symbol"], entry_at=item["entry_at"], exit_at=item["exit_at"],
                     gross_return=item["gross_return"], stop_fraction=item["stop_fraction"],
@@ -87,7 +137,7 @@ def evaluate_joint(
                 events, starting_capital=10000., risk_fraction=.01,
                 max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                 fee_bps_per_side=fee, slippage_bps_per_side=slip,
-                record_executed_positions=(stress_bars is not None and name == "base"),
+                record_executed_positions=True,
             )
             if cost_results[name]["release_approved"] is not False:
                 raise ValueError("research replay cannot approve live release")
@@ -97,7 +147,7 @@ def evaluate_joint(
                     max_leverage=20., max_gross_exposure=6., max_concurrent_positions=2,
                     fee_bps_per_side=fee, slippage_bps_per_side=slip,
                     require_funding_reconciled=True,
-                    record_executed_positions=(stress_bars is not None and name == "base"),
+                    record_executed_positions=True,
                 )
                 if (funding_results[name]["release_approved"] is not False or
                     (funded_events and not funding_results[name]["funding_reconciled_for_all_fills"])):
@@ -112,17 +162,72 @@ def evaluate_joint(
                 funding_results["base"]["accepted_position_trace"],stress_bars)
             if stress_bars is not None and funded_events is not None else None
         )
+        # Each scenario can admit different positions as fees change;
+        # completeness must therefore be audited independently per ledger.
+        # Recorded exits are used only to annotate POST-replay reporting.
+        for ledger in (cost_results, funding_results):
+            for name, outcome in ledger.items():
+                trace = outcome["accepted_position_trace"]
+                late_count = sum(
+                    pd.Timestamp(p["exit_at"]).tz_convert("UTC") >= fold_end
+                    for p in trace
+                )
+                complete = late_count == 0
+                outcome["accepted_positions_settling_after_fold_end"] = late_count
+                outcome["net_30d_goal_assessable"] = complete
+                outcome["full_entry_cohort_goal_met_after_final_settlement"] = (
+                    outcome["net_30d_goal_met_in_development"]
+                )
+                outcome["net_30d_return_at_fold_end"] = (
+                    outcome["net_equity_return"] if complete else None
+                )
+                outcome["net_30d_goal_met_in_development"] = (
+                    outcome["net_30d_goal_met_in_development"] if complete else None
+                )
+                # Preserve existing API: only stress-enabled base replay
+                # includes the potentially large executed-position trace.
+                if stress_bars is None or name != "base":
+                    outcome["accepted_position_trace"] = None
+
+        base = cost_results["base"]
+        base_late_closes = base["accepted_positions_settling_after_fold_end"]
+        base_month_assessable = base["net_30d_goal_assessable"]
+        funded_base = funding_results.get("base")
+        funded_late_closes = (
+            funded_base["accepted_positions_settling_after_fold_end"]
+            if funded_base is not None else None
+        )
+        funded_month_assessable = (
+            funded_base["net_30d_goal_assessable"]
+            if funded_base is not None else None
+        )
         months.append({
             "start": start,
             "base_intrabar_position_stress": stress,
             "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
+            "candidate_exits_at_or_after_fold_end": candidate_exits_after_fold,
+            "accepted_base_positions_settling_after_fold": base_late_closes,
+            "base_cost_30d_goal_assessable": base_month_assessable,
+            "base_cost_net_return_at_fold_end": (
+                cost_results["base"]["net_equity_return"]
+                if base_month_assessable else None
+            ),
+            "accepted_funding_positions_settling_after_fold": funded_late_closes,
+            "funding_adjusted_30d_goal_assessable": funded_month_assessable,
+            "funding_adjusted_net_return_at_fold_end": (
+                funding_results["base"]["net_equity_return"]
+                if funded_month_assessable else None
+            ),
             "cost_scenarios": cost_results,
             "funding_adjusted_cost_scenarios": funding_results if funded_events is not None else None,
-            "net_7pct_at_base_cost": cost_results["base"]["net_30d_goal_met_in_development"],
+            "net_7pct_at_base_cost": (
+                cost_results["base"]["net_30d_goal_met_in_development"]
+                if base_month_assessable else None
+            ),
             "net_7pct_at_base_cost_after_funding": (
                 funding_results["base"]["net_30d_goal_met_in_development"]
-                if funded_events is not None else None
+                if funded_month_assessable else None
             ),
             "net_return_delta_from_archived_funding": (
                 funding_results["base"]["net_equity_return"] -
@@ -138,14 +243,20 @@ def evaluate_joint(
         "shared_risk_book": True,
         "simultaneous_same_symbol_signal_priority": TARGETS,
         "future_exit_timestamps_used_for_admission_priority": False,
-        "all_four_dev_months_net7": all(m["net_7pct_at_base_cost"] for m in months),
+        "all_four_dev_months_net7": all(
+            m["net_7pct_at_base_cost"] is True for m in months
+        ),
+        "all_four_dev_months_30d_goal_assessable": all(
+            m["base_cost_30d_goal_assessable"] for m in months
+        ),
         "holdout_untouched": True,
+        "fold_entry_and_locked_holdout_windows_validated": True,
         "funding_archive_reconciliation_included": funding_resolver is not None,
         "funding_archive_not_okx_execution_data": True,
         "intrabar_ohlc_stress_audited": stress_bars is not None,
         "actual_exchange_liquidation_engine_simulated": False,
         "all_four_dev_months_net7_after_archived_funding": (
-            all(m["net_7pct_at_base_cost_after_funding"] for m in months)
+            all(m["net_7pct_at_base_cost_after_funding"] is True for m in months)
             if funding_resolver is not None else None
         ),
         "release_approved": False,
@@ -156,6 +267,10 @@ def evaluate_joint(
             "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
             "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
+            "Every cost scenario retains full entry-cohort realized PnL but marks its as-of-fold-end 30-day return/goal indeterminate if an accepted trade closes later.",
+            "Position exits are used to annotate reporting only after the predeclared entry-priority and capacity decisions.",
+            "When an accepted position is still open at fold end, no mark-to-market snapshot is available: the 30-day return and target status are unknown, not zero.",
+            "Only actually accepted post-window exits invalidate the 30-day goal; rejected candidates are diagnostic only.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
         ],
     }

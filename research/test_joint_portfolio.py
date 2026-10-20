@@ -7,6 +7,10 @@ def report(target, start):
     at = Timestamp(start, tz="UTC") + Timedelta(days=2)
     return {
         "target": target, "test_start": start + " 00:00:00+00:00",
+        "test_end_exclusive": min(
+            Timestamp(start, tz="UTC") + Timedelta(days=30),
+            Timestamp("2026-08-16T00:00:00Z"),
+        ).isoformat(),
         "holdout_locked_from": "2026-08-17 00:00:00+00:00",
         "research_abstention": {"release_approved": False, "gate_admitted": 1},
         "joint_portfolio_candidates": [{
@@ -117,6 +121,153 @@ class JointBookTests(unittest.TestCase):
         reports=self.all_reports()
         reports[0]["holdout_locked_from"]="2026-08-01"
         with self.assertRaises(ValueError): evaluate_joint(reports)
+
+    def test_forged_candidate_in_locked_holdout_fails_closed(self):
+        reports=self.all_reports()
+        proposal=reports[0]["joint_portfolio_candidates"][0]
+        proposal["entry_at"]="2026-08-17T00:00:00Z"
+        proposal["exit_at"]="2026-08-17T00:05:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_candidate_outside_own_fold_is_rejected(self):
+        from pandas import Timestamp, Timedelta
+        for entry in ("2026-04-16T23:59:00Z", "2026-05-17T00:00:00Z"):
+            reports=self.all_reports()
+            proposal=reports[0]["joint_portfolio_candidates"][0]
+            proposal["entry_at"]=entry
+            proposal["exit_at"]=(Timestamp(entry)+Timedelta(minutes=5)).isoformat()
+            with self.assertRaisesRegex(ValueError,"candidate crosses"):
+                evaluate_joint(reports)
+
+    def test_candidate_exit_in_holdout_is_rejected_even_with_valid_entry(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-08-17T00:00:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_naive_or_reversed_candidate_clock_fails_closed(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["entry_at"]="2026-04-19 00:00:00"
+        with self.assertRaisesRegex(ValueError,"timezone-aware"):
+            evaluate_joint(reports)
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-04-18T00:00:00Z"
+        with self.assertRaisesRegex(ValueError,"candidate crosses"):
+            evaluate_joint(reports)
+
+    def test_fold_end_metadata_must_match_frozen_development_period(self):
+        for broken in ("2026-08-17T00:00:00Z", None):
+            reports=self.all_reports()
+            if broken is None:
+                del reports[0]["test_end_exclusive"]
+            else:
+                reports[0]["test_end_exclusive"]=broken
+            with self.assertRaisesRegex(ValueError,"development fold"):
+                evaluate_joint(reports)
+
+    def test_late_preholdout_exit_is_counted_not_hidden_in_monthly_claim(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        self.assertEqual(result["months"][0]["candidate_exits_at_or_after_fold_end"],1)
+        self.assertTrue(result["fold_entry_and_locked_holdout_windows_validated"])
+        self.assertFalse(result["release_approved"])
+
+    def test_utc_folds_accept_negative_offset_on_previous_local_day(self):
+        reports=self.all_reports()
+        reports[0]["test_start"]="2026-04-16T21:00:00-03:00"
+        reports[0]["test_end_exclusive"]="2026-05-16T21:00:00-03:00"
+        reports[0]["holdout_locked_from"]="2026-08-16T21:00:00-03:00"
+        result=evaluate_joint(reports)
+        self.assertTrue(result["fold_entry_and_locked_holdout_windows_validated"])
+
+    def test_accepted_late_exit_invalidates_only_as_of_month_goal(self):
+        reports=self.all_reports()
+        # Target[0] has the fixed predeclared priority at entry.
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        self.assertEqual(april["accepted_base_positions_settling_after_fold"],1)
+        self.assertFalse(april["base_cost_30d_goal_assessable"])
+        self.assertIsNone(april["base_cost_net_return_at_fold_end"])
+        self.assertIsNone(april["net_7pct_at_base_cost"])
+        self.assertFalse(result["all_four_dev_months_30d_goal_assessable"])
+        self.assertFalse(result["all_four_dev_months_net7"])
+        self.assertIsNotNone(april["cost_scenarios"]["base"]["net_equity_return"])
+        self.assertIsNone(april["cost_scenarios"]["base"]["accepted_position_trace"])
+        self.assertFalse(result["release_approved"])
+
+    def test_late_rejected_candidate_does_not_invalidate_month(self):
+        reports=self.all_reports()
+        # TARGETS[1] enters at exactly the same minute, but TARGETS[0]
+        # already takes the sole BTC slot. Future outcome of rejected trade
+        # must not affect month completeness.
+        reports[1]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        self.assertEqual(april["candidate_exits_at_or_after_fold_end"],1)
+        self.assertEqual(april["accepted_base_positions_settling_after_fold"],0)
+        self.assertTrue(april["base_cost_30d_goal_assessable"])
+        self.assertIsNotNone(april["base_cost_net_return_at_fold_end"])
+        self.assertIsNotNone(april["net_7pct_at_base_cost"])
+
+    def test_every_cost_scenario_hides_unobservable_30day_goal(self):
+        reports=self.all_reports()
+        proposal=reports[0]["joint_portfolio_candidates"][0]
+        proposal["exit_at"]="2026-05-18T00:00:00Z"
+        # A large profit only realized AFTER month end must not manufacture
+        # a positive 30-day goal decision from hindsight cohort PnL.
+        proposal["gross_return"]=.20
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        for name, scenario in april["cost_scenarios"].items():
+            with self.subTest(scenario=name):
+                self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],1)
+                self.assertFalse(scenario["net_30d_goal_assessable"])
+                self.assertIsNone(scenario["net_30d_return_at_fold_end"])
+                self.assertIsNone(scenario["net_30d_goal_met_in_development"])
+                self.assertTrue(scenario["full_entry_cohort_goal_met_after_final_settlement"])
+                self.assertIsNone(scenario["accepted_position_trace"])
+
+    def test_uncontaminated_month_remains_assessable_in_every_scenario(self):
+        report=evaluate_joint(self.all_reports())
+        april=report["months"][0]
+        self.assertTrue(report["all_four_dev_months_30d_goal_assessable"])
+        for scenario in april["cost_scenarios"].values():
+            self.assertTrue(scenario["net_30d_goal_assessable"])
+            self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],0)
+            self.assertIsNotNone(scenario["net_30d_return_at_fold_end"])
+            self.assertIsInstance(scenario["net_30d_goal_met_in_development"],bool)
+
+    def test_funding_replay_independently_requires_month_end_settlement(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        funded=evaluate_joint(
+            reports,
+            funding_resolver=lambda fill: replace(
+                fill, funding_fraction=-.001, funding_reconciled=True,
+            ),
+        )
+        april=funded["months"][0]
+        self.assertEqual(april["accepted_funding_positions_settling_after_fold"],1)
+        self.assertFalse(april["funding_adjusted_30d_goal_assessable"])
+        self.assertIsNone(april["funding_adjusted_net_return_at_fold_end"])
+        self.assertIsNone(april["net_7pct_at_base_cost_after_funding"])
+        self.assertFalse(funded["all_four_dev_months_net7_after_archived_funding"])
+        for scenario in april["funding_adjusted_cost_scenarios"].values():
+            self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],1)
+            self.assertFalse(scenario["net_30d_goal_assessable"])
+            self.assertIsNone(scenario["net_30d_goal_met_in_development"])
+            self.assertIsNone(scenario["accepted_position_trace"])
+        self.assertFalse(funded["release_approved"])
+
+    def test_same_utc_boundaries_allow_explicit_timezone_offset(self):
+        reports=self.all_reports()
+        reports[0]["test_start"]="2026-04-17T03:00:00+03:00"
+        reports[0]["test_end_exclusive"]="2026-05-17T03:00:00+03:00"
+        result=evaluate_joint(reports)
+        self.assertTrue(result["holdout_untouched"])
 
     def test_wrong_direction_rejected(self):
         reports=self.all_reports()
