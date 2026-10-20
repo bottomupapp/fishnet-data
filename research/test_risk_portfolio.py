@@ -92,6 +92,31 @@ class RiskPortfolioTests(unittest.TestCase):
         self.assertEqual(result["executed_fills"], 1)
         self.assertEqual(result["skipped_fills"]["symbol_overlap"], 1)
 
+    def test_same_minute_same_symbol_predeclared_priority_never_uses_future_exit(self):
+        # Predeclared strategy priority is input order: LONG first. At decision
+        # time neither future holding period nor gross return is observable.
+        entry=BASE.isoformat()
+        for long_minutes,short_minutes in ((8,1),(1,8)):
+            long_fill=RiskFill(
+                "BTCUSDT",entry,
+                (BASE+pd.Timedelta(minutes=long_minutes)).isoformat(),
+                gross_return=-.002, stop_fraction=.01, side="long",
+            )
+            short_fill=RiskFill(
+                "BTCUSDT",entry,
+                (BASE+pd.Timedelta(minutes=short_minutes)).isoformat(),
+                gross_return=.025,stop_fraction=.01,side="short",
+            )
+            book=risk_portfolio_audit([long_fill,short_fill],
+                                       record_executed_positions=True)
+            only_first=risk_portfolio_audit([long_fill])
+            self.assertEqual(book["executed_fills"],1)
+            self.assertEqual(book["skipped_fills"]["symbol_overlap"],1)
+            self.assertEqual(book["accepted_position_trace"][0]["side"],"long")
+            self.assertAlmostEqual(book["net_equity_return"],
+                                   only_first["net_equity_return"],places=12)
+            self.assertFalse(book["release_approved"])
+
     def test_overlap_and_capacity_skip_additional_positions(self):
         fills = [trade(at=0), trade(at=1), trade("ETHUSDT", at=1)]
         a = risk_portfolio_audit(fills, max_concurrent_positions=1)

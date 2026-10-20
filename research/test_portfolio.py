@@ -25,6 +25,21 @@ class PortfolioAuditTests(unittest.TestCase):
         report = portfolio_audit([trade("BTCUSDT", 0, .02), trade("BTCUSDT", 8, .02)])
         self.assertAlmostEqual(report["net_equity_return"], 1.002 ** 2 - 1, places=12)
 
+    def test_same_minute_priority_cannot_consult_future_close_or_return(self):
+        from pandas import Timestamp, Timedelta
+        t=Timestamp("2026-07-20T00:00:00Z")
+        for first_duration,second_duration in ((10,1),(1,10)):
+            first=CandidateFill("BTCUSDT",t.isoformat(),
+                (t+Timedelta(minutes=first_duration)).isoformat(),-.03)
+            second=CandidateFill("BTCUSDT",t.isoformat(),
+                (t+Timedelta(minutes=second_duration)).isoformat(),.20)
+            book=portfolio_audit([first,second])
+            just_first=portfolio_audit([first])
+            self.assertEqual(book["executed_fills"],1)
+            self.assertEqual(book["skipped_fills"]["symbol_overlap"],1)
+            self.assertAlmostEqual(book["net_equity_return"],
+                                   just_first["net_equity_return"],places=12)
+
     def test_overlapping_same_symbol_is_rejected(self):
         report = portfolio_audit([trade("BTCUSDT", 0, .02), trade("BTCUSDT", 3, .02)])
         self.assertEqual(report["executed_fills"], 1)
