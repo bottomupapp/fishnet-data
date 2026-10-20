@@ -71,6 +71,7 @@ def audit(root: str) -> dict:
         "start":START.isoformat(),
         "end_inclusive":END.isoformat(),
         "holdout_untouched":True,
+        "archive_source":"historical Binance-style funding archive; NOT OKX funding or personal fee tier",
         "fee_schedule_not_verified":True,
         "funding_uses_1m_open_mark_proxy":True,
         "historical_sample_is_not_portfolio_pnl":True,
