@@ -212,6 +212,30 @@ class JointBookTests(unittest.TestCase):
         self.assertIsNotNone(april["base_cost_net_return_at_fold_end"])
         self.assertIsNotNone(april["net_7pct_at_base_cost"])
 
+    def test_every_cost_scenario_hides_unobservable_30day_goal(self):
+        reports=self.all_reports()
+        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        result=evaluate_joint(reports)
+        april=result["months"][0]
+        for name, scenario in april["cost_scenarios"].items():
+            with self.subTest(scenario=name):
+                self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],1)
+                self.assertFalse(scenario["net_30d_goal_assessable"])
+                self.assertIsNone(scenario["net_30d_return_at_fold_end"])
+                self.assertIsNone(scenario["net_30d_goal_met_in_development"])
+                self.assertIsInstance(scenario["full_entry_cohort_goal_met_after_final_settlement"],bool)
+                self.assertIsNone(scenario["accepted_position_trace"])
+
+    def test_uncontaminated_month_remains_assessable_in_every_scenario(self):
+        report=evaluate_joint(self.all_reports())
+        april=report["months"][0]
+        self.assertTrue(report["all_four_dev_months_30d_goal_assessable"])
+        for scenario in april["cost_scenarios"].values():
+            self.assertTrue(scenario["net_30d_goal_assessable"])
+            self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],0)
+            self.assertIsNotNone(scenario["net_30d_return_at_fold_end"])
+            self.assertIsInstance(scenario["net_30d_goal_met_in_development"],bool)
+
     def test_funding_replay_independently_requires_month_end_settlement(self):
         reports=self.all_reports()
         reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
@@ -227,7 +251,11 @@ class JointBookTests(unittest.TestCase):
         self.assertIsNone(april["funding_adjusted_net_return_at_fold_end"])
         self.assertIsNone(april["net_7pct_at_base_cost_after_funding"])
         self.assertFalse(funded["all_four_dev_months_net7_after_archived_funding"])
-        self.assertIsNone(april["funding_adjusted_cost_scenarios"]["base"]["accepted_position_trace"])
+        for scenario in april["funding_adjusted_cost_scenarios"].values():
+            self.assertEqual(scenario["accepted_positions_settling_after_fold_end"],1)
+            self.assertFalse(scenario["net_30d_goal_assessable"])
+            self.assertIsNone(scenario["net_30d_goal_met_in_development"])
+            self.assertIsNone(scenario["accepted_position_trace"])
         self.assertFalse(funded["release_approved"])
 
     def test_same_utc_boundaries_allow_explicit_timezone_offset(self):
