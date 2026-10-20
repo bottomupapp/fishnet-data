@@ -41,6 +41,7 @@ def risk_portfolio_audit(
     maintenance_margin_fraction: float = .005,
     liquidation_safety_buffer_fraction: float = .005,
     require_funding_reconciled: bool = False,
+    record_executed_positions: bool = False,
 ) -> dict:
     """Risk-budget sizing with hard caps on margin, gross exposure and overlap.
 
@@ -97,6 +98,7 @@ def risk_portfolio_audit(
     max_simultaneous_planned_risk = 0.0
     max_active_gross_to_equity = 0.0
     observed_max_leverage = 0.0
+    executed_positions = []
     ruination = False
 
     def settle(until: pd.Timestamp | None) -> None:
@@ -164,6 +166,18 @@ def risk_portfolio_audit(
             exit_ + pd.Timedelta(minutes=1), fill.symbol, notional,
             posted_margin, planned_loss, net_return, fill.funding_fraction,
         ))
+        if record_executed_positions:
+            executed_positions.append({
+                "symbol": fill.symbol,
+                "side": fill.side,
+                "entry_at": entry.isoformat(),
+                "exit_at": exit_.isoformat(),
+                "stop_fraction": float(fill.stop_fraction),
+                "entry_notional": float(notional),
+                "entry_equity": float(equity),
+                "effective_leverage": float(effective_leverage),
+                "planned_loss": float(planned_loss),
+            })
         accepted += 1
         observed_max_leverage = max(observed_max_leverage, effective_leverage)
         active_risk = sum(p[4] for p in positions)
@@ -197,6 +211,7 @@ def risk_portfolio_audit(
         ),
         "max_realized_only_drawdown": max_realized_drawdown,
         "equity_depleted": ruination,
+        "accepted_position_trace": executed_positions if record_executed_positions else None,
         "funding_reconciled_for_all_fills": bool(fills) and all(f.funding_reconciled for f in fills),
         "funding_reconciliation_required": bool(require_funding_reconciled),
         "realized_funding_pnl_cash": float(total_realized_funding_cash),
