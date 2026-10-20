@@ -52,6 +52,30 @@ class JointBookTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "funding"):
             evaluate_joint(self.all_reports(), funding_resolver=lambda fill: fill)
 
+    def test_stress_uses_only_positions_admitted_to_single_risk_book(self):
+        import numpy as np
+        import pandas as pd
+        parts=[]
+        for start in STARTS:
+            t=pd.Timestamp(start,tz="UTC")+pd.Timedelta(days=2)
+            idx=pd.date_range(t,periods=10,freq="min")
+            parts.append(pd.DataFrame({
+                "open":np.full(10,100.),"high":np.full(10,100.1),
+                "low":np.full(10,99.9),"close":np.full(10,100.),
+                "source_observed":True,
+            },index=idx))
+        history=pd.concat(parts).sort_index()
+        report=evaluate_joint(self.all_reports(),stress_bars={"BTCUSDT":history})
+        self.assertTrue(report["intrabar_ohlc_stress_audited"])
+        self.assertFalse(report["actual_exchange_liquidation_engine_simulated"])
+        for month in report["months"]:
+            stress=month["base_intrabar_position_stress"]
+            self.assertEqual(stress["accepted_position_count"],1)
+            self.assertEqual(stress["positions_with_possible_liquidation"],0)
+            self.assertIsNone(month["funding_adjusted_intrabar_position_stress"])
+            self.assertFalse(stress["portfolio_intraday_mtm_drawdown_computed"])
+        self.assertFalse(report["release_approved"])
+
     def test_missing_reports_rejected(self):
         with self.assertRaises(ValueError): evaluate_joint(self.all_reports()[:-1])
 
