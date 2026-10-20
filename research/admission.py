@@ -53,3 +53,26 @@ def evaluate_admission(
     if margin <= 0:
         return Admission(False, "estimated_edge_below_cost", gross_proxy, cost_fraction, margin)
     return Admission(True, "research_candidate_only", gross_proxy, cost_fraction, margin)
+
+
+def minimum_probability_for_cost_surplus(
+    barrier_fraction: float,
+    *,
+    fee_bps_per_side: float = 6.0,
+    slippage_bps_per_side: float = 3.0,
+    uncertainty_buffer_bps: float = 5.0,
+) -> float:
+    """Exact break-even hit probability under the gate's symmetric barrier proxy.
+
+    This explains whether *any* probability in [0,1] could pass. It is NOT
+    an observed hit rate or an estimated return. No labels or future bars.
+    """
+    if not math.isfinite(barrier_fraction) or not 0 < barrier_fraction < 1:
+        raise ValueError("invalid barrier")
+    costs = (fee_bps_per_side, slippage_bps_per_side, uncertainty_buffer_bps)
+    if not all(math.isfinite(x) and 0 <= x < 10000 for x in costs):
+        raise ValueError("invalid costs")
+    fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
+    retention = (1 - fee) * (1 - slip) / ((1 + fee) * (1 + slip))
+    required_gross = (1 + uncertainty_buffer_bps / 10000) / retention - 1
+    return float((1 + required_gross / barrier_fraction) / 2)
