@@ -74,7 +74,28 @@ def main():
         all_risk_fills = []
         admitted_risk_fills = []
         gate_decisions = {}
+        gate_diagnostics = {}
         for symbol, group in selected.groupby("symbol"):
+            margins = []
+            rejected = {}
+            for row in group.itertuples(index=False):
+                decision = evaluate_admission(
+                    float(row.model_probability), float(getattr(row, f"barrier_{hz}")),
+                    fee_bps_per_side=6.0, slippage_bps_per_side=3.0, uncertainty_buffer_bps=5.0,
+                )
+                if decision.margin_after_cost is not None:
+                    margins.append(decision.margin_after_cost)
+                if not decision.admitted:
+                    rejected[decision.reason] = rejected.get(decision.reason, 0) + 1
+            gate_diagnostics[str(symbol)] = {
+                "preselected_signals": int(len(group)),
+                "admitted": int(len(group) - sum(rejected.values())),
+                "rejected_reasons": rejected,
+                "median_model_probability": float(group["model_probability"].median()) if len(group) else None,
+                "median_barrier_fraction": float(group[f"barrier_{hz}"].median()) if len(group) else None,
+                "median_cost_surplus_proxy": float(np.median(margins)) if margins else None,
+                "positive_surplus_candidates": int(sum(m > 0 for m in margins)),
+            }
             bars = load_historical_bars(args.cost_audit_root, symbol, end)
             fills = []
             refused = {}
@@ -155,6 +176,7 @@ def main():
             "gate_admitted": gate_decisions.get("research_candidate_only", 0),
             "admitted_simulated": len(admitted_fills),
             "gate_decisions": gate_decisions,
+            "diagnostics_by_symbol": gate_diagnostics,
             "mean_net_return_per_admitted_trade": (
                 float(np.mean([x.net_return for x in admitted_fills]))
                 if admitted_fills else None
