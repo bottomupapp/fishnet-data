@@ -55,6 +55,25 @@ def evaluate_admission(
     return Admission(True, "research_candidate_only", gross_proxy, cost_fraction, margin)
 
 
+def minimum_barrier_to_beat_cost(
+    *,
+    fee_bps_per_side: float = 6.0,
+    slippage_bps_per_side: float = 3.0,
+    uncertainty_buffer_bps: float = 5.0,
+) -> float:
+    """Smallest favorable price move feasible at perfect label accuracy.
+
+    This is a threshold of the symmetric-barrier *proxy*, not a market
+    profitability forecast; real t+2 fills, stop gaps and funding differ.
+    """
+    costs = (fee_bps_per_side, slippage_bps_per_side, uncertainty_buffer_bps)
+    if not all(math.isfinite(x) and 0 <= x < 10000 for x in costs):
+        raise ValueError("invalid costs")
+    fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
+    retention = (1 - fee) * (1 - slip) / ((1 + fee) * (1 + slip))
+    return float((1 + uncertainty_buffer_bps / 10000) / retention - 1)
+
+
 def minimum_probability_for_cost_surplus(
     barrier_fraction: float,
     *,
@@ -69,10 +88,9 @@ def minimum_probability_for_cost_surplus(
     """
     if not math.isfinite(barrier_fraction) or not 0 < barrier_fraction < 1:
         raise ValueError("invalid barrier")
-    costs = (fee_bps_per_side, slippage_bps_per_side, uncertainty_buffer_bps)
-    if not all(math.isfinite(x) and 0 <= x < 10000 for x in costs):
-        raise ValueError("invalid costs")
-    fee, slip = fee_bps_per_side / 10000, slippage_bps_per_side / 10000
-    retention = (1 - fee) * (1 - slip) / ((1 + fee) * (1 + slip))
-    required_gross = (1 + uncertainty_buffer_bps / 10000) / retention - 1
+    required_gross = minimum_barrier_to_beat_cost(
+        fee_bps_per_side=fee_bps_per_side,
+        slippage_bps_per_side=slippage_bps_per_side,
+        uncertainty_buffer_bps=uncertainty_buffer_bps,
+    )
     return float((1 + required_gross / barrier_fraction) / 2)
