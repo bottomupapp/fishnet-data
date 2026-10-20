@@ -60,7 +60,11 @@ def audit_intrabar_accepted_positions(
             raise ValueError("complete UTC minute OHLC data required")
         window=bars.loc[entry:exit_]
         expected=pd.date_range(entry,exit_,freq="min",tz=entry.tz)
-        if not window.index.equals(expected):
+        # Parquet bars can be datetime64[us, UTC] while generated date_range
+        # is datetime64[ns, UTC]. DatetimeIndex.equals() compares the unit
+        # as well as actual instants; normalize BOTH to nanoseconds in UTC.
+        if not (window.index.tz_convert("UTC").as_unit("ns")
+                .equals(expected.tz_convert("UTC").as_unit("ns"))):
             raise ValueError("missing observed minute inside accepted trade")
         if "source_observed" in window and not window["source_observed"].fillna(False).astype(bool).all():
             raise ValueError("synthetic OHLC during accepted trade")
