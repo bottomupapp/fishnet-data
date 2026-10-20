@@ -18,6 +18,7 @@ import pandas as pd
 from research.execution import load_historical_bars
 from research.features import HORIZONS
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
+from research.prob_calibration import fit_monotone_calibrator
 from research.rr_labels import HOLDOUT_START, label_rr_events, REWARD_MULTIPLE
 from research.run import PARAMS, feature_cols, dedupe
 
@@ -105,12 +106,20 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         train.rr_label.astype(int)), num_boost_round=rounds)
     cal_scores = model.predict(cal[columns])
     test_scores = model.predict(test[columns])
+    # Fit ONLY on the preceding calibration window. Raw LightGBM scores
+    # can be radically overconfident on rare +3.2R targets.
+    calibrator = fit_monotone_calibrator(cal_scores, cal.rr_label.to_numpy())
+    calibrated_test_scores = calibrator.predict(test_scores)
     cal_cutoff = float(np.quantile(cal_scores, .99))
     test_with_p = test.copy()
     test_with_p["prediction"] = test_scores
+    test_with_p["calibrated_probability"] = calibrated_test_scores
     top = dedupe(test_with_p[test_with_p.prediction >= cal_cutoff], horizon)
     gate_threshold = max(cal_cutoff, ECONOMIC_PROBABILITY_FLOOR)
-    gated = dedupe(test_with_p[test_with_p.prediction >= gate_threshold], horizon)
+    gated = dedupe(test_with_p[
+        (test_with_p.prediction >= cal_cutoff) &
+        (test_with_p.calibrated_probability >= ECONOMIC_PROBABILITY_FLOOR)
+    ], horizon)
 
     fills = [
         RiskFill(str(row.symbol), pd.Timestamp(row.rr_entry_at).isoformat(),
@@ -138,7 +147,14 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         "feature_count":len(columns),
         "calibration_top1_cutoff":cal_cutoff,
         "economic_1R_loss_3_2R_gain_probability_floor":ECONOMIC_PROBABILITY_FLOOR,
-        "gate_probability_threshold":gate_threshold,
+        "gate_raw_top1_cutoff":cal_cutoff,
+        "gate_uses_calibration_probability":True,
+        "pretest_calibration_base_rate":calibrator.base_rate,
+        "pretest_calibration_positives":calibrator.calibration_positives,
+        "pretest_calibration_bins":len(calibrator.probabilities),
+        "pretest_max_calibrated_probability":max(calibrator.probabilities),
+        "test_max_calibrated_probability":float(np.max(calibrated_test_scores)),
+        "gate_probability_threshold":ECONOMIC_PROBABILITY_FLOOR,
         "calibrated_top1_candidate_count":int(len(top)),
         "calibrated_top1_historical_hit_fraction":float(top.rr_label.mean()) if len(top) else None,
         "calibrated_top1_mean_cost_net_R":float(top.rr_net_r.mean()) if len(top) else None,
@@ -150,7 +166,7 @@ def run(features_file: str, root: str, *, side: str, horizon: int, rounds: int=1
         "limitations": [
             "Single development fold, not an untouched holdout or real execution.",
             "Probability floor assumes winners +3.2R and losers -1R; timeouts and gaps differ.",
-            "Model calibration beyond quantile thresholds is unproven; no production signals.",
+            "Calibration uses only pretest empirical hit rates with shrinkage; not yet independently validated.",
             "Costs and margin are assumed; no funding, true liquidation, partial fills or impact.",
         ],
     }
