@@ -24,6 +24,7 @@ from research.risk_portfolio import RiskFill, risk_portfolio_audit
 TARGETS = ("y_long_5", "y_short_5", "y_long_15", "y_short_15", "y_long_60", "y_short_60")
 STARTS = ("2026-04-17", "2026-05-17", "2026-06-17", "2026-07-17")
 SCENARIOS = (("lower_cost", 3., 1.), ("base", 6., 3.), ("higher_cost", 10., 6.))
+MIN_RESEARCH_ACCEPTED_FILLS_PER_FOLD = 20  # evidence diagnostic, not signal gate
 
 
 def make_archived_funding_resolver(root: str) -> Callable[[RiskFill], RiskFill]:
@@ -238,6 +239,11 @@ def evaluate_joint(
             "funding_adjusted_minute_close_portfolio_mtm": funded_mtm,
             "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
+            "base_accepted_fills": base["executed_fills"],
+            "base_accepted_fill_evidence_floor": MIN_RESEARCH_ACCEPTED_FILLS_PER_FOLD,
+            "base_has_sufficient_accepted_fill_count": (
+                base["executed_fills"] >= MIN_RESEARCH_ACCEPTED_FILLS_PER_FOLD
+            ),
             "candidate_exits_at_or_after_fold_end": candidate_exits_after_fold,
             "accepted_base_positions_settling_after_fold": base_late_closes,
             "base_cost_30d_goal_assessable": base_month_assessable,
@@ -275,6 +281,15 @@ def evaluate_joint(
         "shared_risk_book": True,
         "simultaneous_same_symbol_signal_priority": TARGETS,
         "future_exit_timestamps_used_for_admission_priority": False,
+        "minimum_accepted_fills_per_development_fold": MIN_RESEARCH_ACCEPTED_FILLS_PER_FOLD,
+        "all_four_dev_months_have_sufficient_accepted_fills": all(
+            m["base_has_sufficient_accepted_fill_count"] for m in months
+        ),
+        "all_four_dev_months_net7_with_minimum_sample": all(
+            m["net_7pct_at_base_cost"] is True
+            and m["base_has_sufficient_accepted_fill_count"]
+            for m in months
+        ),
         "all_four_dev_months_net7": all(
             m["net_7pct_at_base_cost"] is True for m in months
         ),
@@ -304,6 +319,7 @@ def evaluate_joint(
             "Position exits are used to annotate reporting only after the predeclared entry-priority and capacity decisions.",
             "When an accepted position is still open at fold end, no mark-to-market snapshot is available: the 30-day return and target status are unknown, not zero.",
             "Only actually accepted post-window exits invalidate the 30-day goal; rejected candidates are diagnostic only.",
+            "A 20-accepted-fill minimum is a descriptive sample-size floor, not proof of statistical significance or an order admission rule.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
         ],
     }
