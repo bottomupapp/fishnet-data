@@ -58,6 +58,9 @@ def generate(root: str, feature_path: str) -> dict:
     reports=[]
     for symbol in SYMBOLS:
         market = load_historical_bars(root, symbol, HOLDOUT_START)
+        # These are untouched source archive rows, so every present row was
+        # observed. A missing minute is still rejected by timestamp continuity.
+        market["source_observed"] = True
         features = df[df.symbol == symbol].sort_values("t").copy()
         for horizon in HORIZONS:
             stop = np.maximum(.002, features.sigma_1d.to_numpy(dtype=float) * math.sqrt(horizon))
