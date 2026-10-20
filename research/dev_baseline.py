@@ -9,7 +9,7 @@ import pandas as pd
 import lightgbm as lgb
 from research.run import HOLDOUT_START, EMBARGO, PARAMS, feature_cols, score, dedupe
 from research.execution import simulate_long, simulate_short, load_historical_bars, net_after_costs, net_after_costs_short
-from research.admission import evaluate_admission
+from research.admission import evaluate_admission, minimum_probability_for_cost_surplus
 from research.portfolio import CandidateFill, portfolio_audit
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
 
@@ -95,6 +95,14 @@ def main():
                 "median_barrier_fraction": float(group[f"barrier_{hz}"].median()) if len(group) else None,
                 "median_cost_surplus_proxy": float(np.median(margins)) if margins else None,
                 "positive_surplus_candidates": int(sum(m > 0 for m in margins)),
+                "median_probability_needed_to_cover_cost": (
+                    minimum_probability_for_cost_surplus(float(group[f"barrier_{hz}"].median()))
+                    if len(group) else None
+                ),
+                "median_barrier_structurally_untradeable": (
+                    minimum_probability_for_cost_surplus(float(group[f"barrier_{hz}"].median())) >= 1
+                    if len(group) else None
+                ),
             }
             bars = load_historical_bars(args.cost_audit_root, symbol, end)
             fills = []
