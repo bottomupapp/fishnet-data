@@ -4,6 +4,8 @@ on:
     paths:
       - 'research/major_expansion.py'
       - 'research/test_major_expansion.py'
+      - 'research/dev_baseline.py'
+      - 'research/test_admission_diagnostics.py'
       - '.github/workflows/five-major-expansion.yml'
   workflow_dispatch:
 permissions:
@@ -47,6 +49,20 @@ jobs:
           python -m research.dev_baseline /tmp/fishnet-five-major-features.parquet \
             --output /tmp/fishnet-five-major-short15.json --target y_short_15 \
             --test-start 2026-07-17 --cost-audit-root data --rounds 100
+      - name: Show coin-level research admission diagnostics
+        run: |
+          python - <<'PY'
+          import json
+          for side in ('long15', 'short15'):
+              report=json.load(open(f'/tmp/fishnet-five-major-{side}.json'))
+              gate=report['research_abstention']
+              print(json.dumps({
+                  'side':side, 'selected':gate['baseline_selected'],
+                  'admitted':gate['gate_admitted'],
+                  'coins':gate['diagnostics_by_symbol'],
+                  'release_approved':gate['release_approved']
+              }, indent=2))
+          PY
       - uses: actions/upload-artifact@v4
         if: success()
         with:
