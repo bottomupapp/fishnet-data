@@ -214,7 +214,11 @@ class JointBookTests(unittest.TestCase):
 
     def test_every_cost_scenario_hides_unobservable_30day_goal(self):
         reports=self.all_reports()
-        reports[0]["joint_portfolio_candidates"][0]["exit_at"]="2026-05-18T00:00:00Z"
+        proposal=reports[0]["joint_portfolio_candidates"][0]
+        proposal["exit_at"]="2026-05-18T00:00:00Z"
+        # A large profit only realized AFTER month end must not manufacture
+        # a positive 30-day goal decision from hindsight cohort PnL.
+        proposal["gross_return"]=.20
         result=evaluate_joint(reports)
         april=result["months"][0]
         for name, scenario in april["cost_scenarios"].items():
@@ -223,7 +227,7 @@ class JointBookTests(unittest.TestCase):
                 self.assertFalse(scenario["net_30d_goal_assessable"])
                 self.assertIsNone(scenario["net_30d_return_at_fold_end"])
                 self.assertIsNone(scenario["net_30d_goal_met_in_development"])
-                self.assertIsInstance(scenario["full_entry_cohort_goal_met_after_final_settlement"],bool)
+                self.assertTrue(scenario["full_entry_cohort_goal_met_after_final_settlement"])
                 self.assertIsNone(scenario["accepted_position_trace"])
 
     def test_uncontaminated_month_remains_assessable_in_every_scenario(self):
