@@ -2,7 +2,7 @@ import unittest
 import pandas as pd
 
 from research.rr_model import (
-    ECONOMIC_PROBABILITY_FLOOR, HOLDOUT_START, partition_boundaries, safe_model_columns
+    ECONOMIC_PROBABILITY_FLOOR, PREDECLARED_REWARDS, HOLDOUT_START, partition_boundaries, safe_model_columns
 )
 
 
@@ -37,6 +37,18 @@ class Net32RModelSafetyTests(unittest.TestCase):
         bad["rr_net_r"]=[3.2,-1]
         with self.assertRaises(ValueError):
             safe_model_columns(bad)
+
+    def test_reward_grid_predeclared_and_not_force_fit_to_goal(self):
+        self.assertEqual(PREDECLARED_REWARDS, (1.0, 1.5, 2.0, 3.2))
+        self.assertAlmostEqual(1/(1+1.),.5)
+        self.assertAlmostEqual(1/(1+1.5),.4)
+        self.assertAlmostEqual(1/(1+2.),1/3)
+        self.assertAlmostEqual(1/(1+3.2),ECONOMIC_PROBABILITY_FLOOR)
+
+    def test_all_reward_options_share_the_same_holdout_protection(self):
+        for horizon in (60,240):
+            windows=partition_boundaries(pd.Timestamp("2026-07-17T00:00:00Z"),horizon)
+            self.assertLessEqual(windows["test_end_exclusive"],HOLDOUT_START-pd.Timedelta(days=1))
 
     def test_economic_floor_requires_nontrivial_probability(self):
         self.assertAlmostEqual(ECONOMIC_PROBABILITY_FLOOR,1/4.2)
