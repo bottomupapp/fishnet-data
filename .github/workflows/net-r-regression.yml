@@ -4,6 +4,8 @@ on:
     paths:
       - 'research/net_r_gate.py'
       - 'research/net_r_regression.py'
+      - 'research/regime_gate.py'
+      - 'research/test_regime_gate.py'
       - 'research/test_net_r_regression.py'
       - '.github/workflows/net-r-regression.yml'
   workflow_dispatch:
