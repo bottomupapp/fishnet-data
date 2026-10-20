@@ -3,7 +3,7 @@
 Leverage affects margin and exposure, NOT the chosen per-trade stop budget.
 This is NOT exchange liquidation/margin modelling and never places orders.
 It runs on historical simulated gross fills; trading fees/slippage are charged
-once on the notional. Stops can gap, so 1% PLANNED risk is not a loss guarantee.
+once on the notional. Historical funding is OPT-IN and never assumed present. Stops can gap, so 1% PLANNED risk is not a loss guarantee.
 """
 from __future__ import annotations
 
@@ -47,6 +47,9 @@ def risk_portfolio_audit(
     The planned stop loss includes roundtrip trading costs, so a complete
     stop (with no adverse gap) targets at most risk_fraction of equity.
 
+    When require_funding_reconciled=True, each event must have archived
+    settlement cashflows attached. Funding losses may exceed planned stop risk.
+
     Effective leverage is capped by a simplistic liquidation-distance proxy;
     this proxy cannot certify actual Binance/OKX liquidation safety.
     """
@@ -74,6 +77,8 @@ def risk_portfolio_audit(
             not 0 < fill.stop_fraction < 1 or fill.side not in ('long', 'short')
             or not math.isfinite(fill.funding_fraction)):
             raise ValueError("invalid fill / stop / funding input")
+        if fill.funding_fraction != 0 and fill.funding_reconciled is not True:
+            raise ValueError("nonzero funding must be archive-reconciled")
         if require_funding_reconciled and fill.funding_reconciled is not True:
             raise ValueError("historical funding is required for every simulated fill")
         ordered.append((entry.tz_convert("UTC"), exit_.tz_convert("UTC"), fill))
@@ -201,6 +206,7 @@ def risk_portfolio_audit(
             "Gaps, funding, liquidation fees and bankruptcy can exceed planned risk.",
             "Archived funding is included ONLY when require_funding_reconciled is true; 1m opens approximate mark prices.",
             "Exchange-specific isolated/cross maintenance margin and fee tiers are not modelled.",
+            "Realized-only drawdown can understate interim losses and liquidation risk.",
             "Equity/drawdown are settled-only, not intrabar marked-to-market; exposure under stress is understated.",
             "No market impact, partial fills or live order placement. Historical 30-day development windows only.",
         ],
