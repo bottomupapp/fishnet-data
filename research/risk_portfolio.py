@@ -181,6 +181,11 @@ def risk_portfolio_audit(
                 "entry_equity": float(equity),
                 "effective_leverage": float(effective_leverage),
                 "planned_loss": float(planned_loss),
+                # Audit-only: actual simulated cash settlement at exit + 1m.
+                # Intraminute open MTM must never consult this future result.
+                "realized_net_pnl_cash": float(notional * (net_return + fill.funding_fraction)),
+                "fee_bps_per_side": float(fee_bps_per_side),
+                "slippage_bps_per_side": float(slippage_bps_per_side),
             })
         accepted += 1
         observed_max_leverage = max(observed_max_leverage, effective_leverage)
