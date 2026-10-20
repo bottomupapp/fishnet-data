@@ -16,6 +16,7 @@ import pandas as pd
 from research.execution import load_historical_bars
 from research.funding_cost import load_funding_events, reconcile_risk_fill_funding
 from research.intrabar_stress import audit_intrabar_accepted_positions
+from research.shared_book_mtm import audit_shared_book_minute_mtm
 from research.rr_labels import HOLDOUT_START
 
 from research.risk_portfolio import RiskFill, risk_portfolio_audit
@@ -162,6 +163,26 @@ def evaluate_joint(
                 funding_results["base"]["accepted_position_trace"],stress_bars)
             if stress_bars is not None and funded_events is not None else None
         )
+        base_mtm = (
+            audit_shared_book_minute_mtm(
+                cost_results["base"]["accepted_position_trace"], stress_bars)
+            if stress_bars is not None else None
+        )
+        funded_mtm = (
+            audit_shared_book_minute_mtm(
+                funding_results["base"]["accepted_position_trace"], stress_bars)
+            if stress_bars is not None and funded_events is not None else None
+        )
+        # Compare after full replay: the MTM audit must settle to precisely
+        # the same historical cash as the accepted-fill shared risk ledger.
+        if base_mtm is not None and not pd.isna(base_mtm["last_settled_equity"]):
+            if not abs(base_mtm["last_settled_equity"] -
+                       cost_results["base"]["final_equity"]) < 1.e-6:
+                raise ValueError("minute MTM cash does not reconcile with shared risk book")
+        if funded_mtm is not None:
+            if not abs(funded_mtm["last_settled_equity"] -
+                       funding_results["base"]["final_equity"]) < 1.e-6:
+                raise ValueError("funding-adjusted MTM cash does not reconcile")
         # Each scenario can admit different positions as fees change;
         # completeness must therefore be audited independently per ledger.
         # Recorded exits are used only to annotate POST-replay reporting.
@@ -204,6 +225,8 @@ def evaluate_joint(
         months.append({
             "start": start,
             "base_intrabar_position_stress": stress,
+            "base_minute_close_portfolio_mtm": base_mtm,
+            "funding_adjusted_minute_close_portfolio_mtm": funded_mtm,
             "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
             "candidate_exits_at_or_after_fold_end": candidate_exits_after_fold,
@@ -254,6 +277,7 @@ def evaluate_joint(
         "funding_archive_reconciliation_included": funding_resolver is not None,
         "funding_archive_not_okx_execution_data": True,
         "intrabar_ohlc_stress_audited": stress_bars is not None,
+        "minute_close_shared_portfolio_mtm_audited": stress_bars is not None,
         "actual_exchange_liquidation_engine_simulated": False,
         "all_four_dev_months_net7_after_archived_funding": (
             all(m["net_7pct_at_base_cost_after_funding"] is True for m in months)
@@ -264,7 +288,7 @@ def evaluate_joint(
             "Shared portfolio now resolves simultaneous opportunities and margin constraints.",
             "Orders, fills and fees remain historical assumptions; no actual broker execution.",
             "Same-symbol concurrent LONG and SHORT are deliberately excluded pending hedge-mode analysis.",
-            "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
+            "Legacy shared portfolio settlement drawdown is realized-only; opt-in minute-close OHLC MTM is reported separately, not a liquidation engine.",
             "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
             "Every cost scenario retains full entry-cohort realized PnL but marks its as-of-fold-end 30-day return/goal indeterminate if an accepted trade closes later.",
