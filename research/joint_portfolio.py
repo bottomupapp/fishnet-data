@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Callable
 
+import pandas as pd
+
 from research.execution import load_historical_bars
 from research.funding_cost import load_funding_events, reconcile_risk_fill_funding
 from research.intrabar_stress import audit_intrabar_accepted_positions
@@ -39,6 +41,45 @@ def make_archived_funding_resolver(root: str) -> Callable[[RiskFill], RiskFill]:
     return resolve
 
 
+def _validated_fold_window(report: dict, date: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Trust timestamps, not a report's self-declared holdout-safe flag."""
+    expected_start = pd.Timestamp(date, tz="UTC")
+    expected_end = min(
+        expected_start + pd.Timedelta(days=30),
+        HOLDOUT_START - pd.Timedelta(days=1),  # frozen pre-holdout embargo
+    )
+    try:
+        actual_start = pd.Timestamp(report["test_start"])
+        actual_end = pd.Timestamp(report["test_end_exclusive"])
+        actual_lock = pd.Timestamp(report["holdout_locked_from"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("missing or invalid development fold boundaries") from None
+    if (any(t.tzinfo is None for t in (actual_start, actual_end, actual_lock))
+        or actual_start.tz_convert("UTC") != expected_start
+        or actual_end.tz_convert("UTC") != expected_end
+        or actual_lock.tz_convert("UTC") != HOLDOUT_START):
+        raise ValueError("development fold window or locked holdout differs from predeclared UTC boundaries")
+    return expected_start, expected_end
+
+
+def _validated_event_window(
+    item: dict, fold_start: pd.Timestamp, fold_end: pd.Timestamp,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """A candidate must enter its declared development fold and exit pre-holdout."""
+    try:
+        entry = pd.Timestamp(item["entry_at"])
+        exit_ = pd.Timestamp(item["exit_at"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("missing or invalid historical candidate timestamps") from None
+    if entry.tzinfo is None or exit_.tzinfo is None:
+        raise ValueError("historical candidates require timezone-aware timestamps")
+    entry, exit_ = entry.tz_convert("UTC"), exit_.tz_convert("UTC")
+    if (entry < fold_start or entry >= fold_end or exit_ < entry
+        or exit_ >= HOLDOUT_START):
+        raise ValueError("candidate crosses development entry window or locked holdout")
+    return entry, exit_
+
+
 def evaluate_joint(
     reports: list[dict],
     *,
@@ -53,8 +94,7 @@ def evaluate_joint(
         date = str(r.get("test_start", ""))[:10]
         if target not in TARGETS or date not in STARTS or (target, date) in indexed:
             raise ValueError("unknown, repeated, or out-of-window target-fold")
-        if str(r.get("holdout_locked_from", ""))[:10] != "2026-08-17":
-            raise ValueError("locked holdout changed")
+        _validated_fold_window(r, date)
         if r.get("research_abstention", {}).get("release_approved") is not False:
             raise ValueError("research gate must remain non-deployable")
         events = r.get("joint_portfolio_candidates")
@@ -67,6 +107,8 @@ def evaluate_joint(
     months = []
     for start in STARTS:
         events = []
+        fold_start, fold_end = _validated_fold_window(indexed[(TARGETS[0], start)], start)
+        candidate_exits_after_fold = 0
         for target in TARGETS:  # PREDECLARED priority for exact entry/symbol ties; never rank by future exit
             record = indexed[(target, start)]
             for item in record["joint_portfolio_candidates"]:
@@ -74,6 +116,8 @@ def evaluate_joint(
                     raise ValueError("event target/direction mismatch")
                 if item.get("symbol") not in ("BTCUSDT", "ETHUSDT"):
                     raise ValueError("new symbol needs separate training/audit")
+                _, exit_time = _validated_event_window(item, fold_start, fold_end)
+                candidate_exits_after_fold += int(exit_time >= fold_end)
                 events.append(RiskFill(
                     symbol=item["symbol"], entry_at=item["entry_at"], exit_at=item["exit_at"],
                     gross_return=item["gross_return"], stop_fraction=item["stop_fraction"],
@@ -117,6 +161,7 @@ def evaluate_joint(
             "base_intrabar_position_stress": stress,
             "funding_adjusted_intrabar_position_stress": funded_stress,
             "candidate_fills": len(events),
+            "candidate_exits_at_or_after_fold_end": candidate_exits_after_fold,
             "cost_scenarios": cost_results,
             "funding_adjusted_cost_scenarios": funding_results if funded_events is not None else None,
             "net_7pct_at_base_cost": cost_results["base"]["net_30d_goal_met_in_development"],
@@ -140,6 +185,7 @@ def evaluate_joint(
         "future_exit_timestamps_used_for_admission_priority": False,
         "all_four_dev_months_net7": all(m["net_7pct_at_base_cost"] for m in months),
         "holdout_untouched": True,
+        "fold_entry_and_locked_holdout_windows_validated": True,
         "funding_archive_reconciliation_included": funding_resolver is not None,
         "funding_archive_not_okx_execution_data": True,
         "intrabar_ohlc_stress_audited": stress_bars is not None,
@@ -156,6 +202,7 @@ def evaluate_joint(
             "Portfolio drawdown is settlement-only; no mark-to-market liquidation.",
             "Intrabar stress flags possible pre-exit liquidation conservatively; not actual liquidation nor portfolio MTM.",
             "Funding-aware replay uses historical Binance-style rates, 1m open mark proxy, NOT OKX rates.",
+            "Development returns settle an entry cohort; candidate exits crossing fold end are counted, not silently described as exactly 30-day MTM.",
             "Do not select models or tune gate settings by inspecting the locked holdout.",
         ],
     }
