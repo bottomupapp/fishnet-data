@@ -17,6 +17,8 @@ from research.rr_labels import HOLDOUT_START
 MAINTENANCE_MARGIN_PROXY = .005
 LIQUIDATION_BUFFER_PROXY = .005
 LEVERAGE_SCENARIOS = (1., 2., 3., 5., 10., 15., 20.)
+# Hypothetical research assumptions, NOT verified exchange maintenance tiers.
+MARGIN_ASSUMPTIONS = (("base", .005, .005, 0.), ("higher_maintenance", .01, .005, .002), ("severe", .02, .01, .005))
 
 
 def audit_intrabar_accepted_positions(
@@ -98,6 +100,17 @@ def audit_intrabar_accepted_positions(
                     adverse >= proxy_distance
                 ),
             })
+        assumption_sensitivity = []
+        for label, assumed_maintenance, assumed_buffer, liquidation_fee in MARGIN_ASSUMPTIONS:
+            distance = max(0., 1. / leverage - assumed_maintenance - assumed_buffer - liquidation_fee)
+            assumption_sensitivity.append({
+                "scenario": label,
+                "assumed_maintenance_fraction": assumed_maintenance,
+                "assumed_safety_buffer_fraction": assumed_buffer,
+                "assumed_liquidation_fee_fraction": liquidation_fee,
+                "proxy_distance_fraction": float(distance),
+                "possible_proxy_breach": bool(adverse >= distance),
+            })
         results.append({
             "symbol":symbol,"side":side,
             "entry_at":entry.isoformat(),"exit_at":exit_.isoformat(),
@@ -110,6 +123,7 @@ def audit_intrabar_accepted_positions(
                 bool(adverse>=liquidation_distance),
             "stop_was_touched_or_exceeded_intrabar":bool(adverse>=stop),
             "fixed_notional_leverage_sensitivity": leverage_sensitivity,
+            "margin_assumption_sensitivity": assumption_sensitivity,
         })
     return {
         "accepted_position_count":len(results),
@@ -122,6 +136,12 @@ def audit_intrabar_accepted_positions(
             max(x["adverse_multiple_of_planned_stop"] for x in results)
             if results else 0.0),
         "leverage_scenarios":LEVERAGE_SCENARIOS,
+        "margin_assumption_scenarios": [name for name, *_ in MARGIN_ASSUMPTIONS],
+        "margin_assumption_proxy_breaches": [
+            {"scenario": name, "positions_with_possible_proxy_breach": sum(
+                p["margin_assumption_sensitivity"][i]["possible_proxy_breach"] for p in results
+            )} for i, (name, *_rest) in enumerate(MARGIN_ASSUMPTIONS)
+        ],
         "fixed_notional_leverage_scenario_summary":[
             {
                 "hypothetical_leverage": lev,
@@ -139,6 +159,7 @@ def audit_intrabar_accepted_positions(
         "limitations":[
             "OHLC worst high/low within exit candle could occur after reported fill.",
             "Proxy uses traded OHLC, not exchange mark prices or true liquidation tiers.",
+            "Margin/fee scenarios are transparent assumptions, not exchange maintenance brackets, mark prices or liquidation charges.",
             "Hypothetical 1-20x leverage changes only isolated-margin distance at fixed notional: not portfolio leverage selection, cross-margin balance or realized PnL.",
             "Only selected executed positions audited, not a full minute-by-minute portfolio MTM curve.",
             "Every stressed minute must carry observed-source provenance; direct archived Parquet loader attaches this only to physically present records.",
