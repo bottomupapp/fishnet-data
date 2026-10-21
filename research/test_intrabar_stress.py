@@ -65,6 +65,26 @@ class IntrabarStressTests(unittest.TestCase):
             for s in result["fixed_notional_leverage_scenario_summary"]
         ))
 
+    def test_margin_assumption_stress_never_changes_base_audit(self):
+        self.bars.loc[self.index[2],"low"]=96.
+        r=self.audit()
+        s=r["margin_assumption_proxy_breaches"]
+        self.assertEqual([x["scenario"] for x in s],
+                         ["base","higher_maintenance","severe"])
+        self.assertEqual([x["positions_with_possible_proxy_breach"] for x in s],
+                         [1,1,1])
+        self.assertEqual(r["accepted_position_count"],1)
+        self.assertFalse(r["release_approved"])
+
+    def test_fee_and_maintenance_assumptions_change_proxy_not_fills(self):
+        self.bars.loc[self.index[2],"low"]=97.
+        r=self.audit()
+        s=r["per_position"][0]["margin_assumption_sensitivity"]
+        self.assertFalse(s[0]["possible_proxy_breach"])
+        self.assertTrue(s[-1]["possible_proxy_breach"])
+        self.assertEqual(len(s),3)
+        self.assertEqual(r["accepted_position_count"],1)
+
     def test_short_uses_adverse_high(self):
         self.pos["side"]="short"
         self.bars.loc[self.index[2],"high"]=110.
