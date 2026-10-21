@@ -86,6 +86,19 @@ class IntrabarStressTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"synthetic"):
             self.audit(bars=bad)
 
+    def test_missing_provenance_column_fails_closed_for_stress(self):
+        # All OHLC fields may be numerically valid, but unprovenanced rows
+        # cannot be certified as observed when called outside archive loader.
+        without_flag=self.bars.drop(columns=["source_observed"])
+        with self.assertRaisesRegex(ValueError,"observed|OHLC"):
+            self.audit(bars=without_flag)
+
+    def test_missing_provenance_for_hypothetical_leverage_cannot_pass(self):
+        untrusted=self.bars.drop(columns=["source_observed"]).copy()
+        untrusted.loc[self.index[2],"low"]=90.
+        with self.assertRaisesRegex(ValueError,"observed|OHLC"):
+            self.audit(bars=untrusted)
+
     def test_holdout_window_cannot_be_audited(self):
         future=dict(self.pos)
         future["exit_at"]="2026-08-17T00:00:00Z"

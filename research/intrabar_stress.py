@@ -57,7 +57,7 @@ def audit_intrabar_accepted_positions(
         bars=bars_by_symbol[symbol]
         if (not isinstance(bars.index,pd.DatetimeIndex) or bars.index.tz is None
             or not bars.index.is_monotonic_increasing or bars.index.has_duplicates
-            or not {"open","high","low","close"}.issubset(bars.columns)):
+            or not {"open","high","low","close","source_observed"}.issubset(bars.columns)):
             raise ValueError("complete UTC minute OHLC data required")
         window=bars.loc[entry:exit_]
         expected=pd.date_range(entry,exit_,freq="min",tz=entry.tz)
@@ -67,7 +67,7 @@ def audit_intrabar_accepted_positions(
         if not (window.index.tz_convert("UTC").as_unit("ns")
                 .equals(expected.tz_convert("UTC").as_unit("ns"))):
             raise ValueError("missing observed minute inside accepted trade")
-        if "source_observed" in window and not window["source_observed"].fillna(False).astype(bool).all():
+        if not window["source_observed"].fillna(False).astype(bool).all():
             raise ValueError("synthetic OHLC during accepted trade")
         arr=window[["open","high","low","close"]].to_numpy(dtype=float)
         if (not np.isfinite(arr).all() or np.any(arr<=0)
@@ -141,6 +141,7 @@ def audit_intrabar_accepted_positions(
             "Proxy uses traded OHLC, not exchange mark prices or true liquidation tiers.",
             "Hypothetical 1-20x leverage changes only isolated-margin distance at fixed notional: not portfolio leverage selection, cross-margin balance or realized PnL.",
             "Only selected executed positions audited, not a full minute-by-minute portfolio MTM curve.",
+            "Every stressed minute must carry observed-source provenance; direct archived Parquet loader attaches this only to physically present records.",
             "Funding/liquidation fees, maintenance-tier changes, queue fills and margin call dynamics unmodeled.",
         ],
         "release_approved":False,
