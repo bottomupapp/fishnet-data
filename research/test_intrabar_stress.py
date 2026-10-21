@@ -66,7 +66,9 @@ class IntrabarStressTests(unittest.TestCase):
         ))
 
     def test_margin_assumption_stress_never_changes_base_audit(self):
-        self.bars.loc[self.index[2],"low"]=96.
+        # A 4.1% excursion is strictly beyond the 4% base proxy threshold.
+        # Avoid a floating-point equality boundary in this scenario fixture.
+        self.bars.loc[self.index[2],"low"]=95.9
         r=self.audit()
         s=r["margin_assumption_proxy_breaches"]
         self.assertEqual([x["scenario"] for x in s],
